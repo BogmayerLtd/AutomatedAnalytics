@@ -1,0 +1,8 @@
+flask
+pandas
+matplotlib
+seaborn
+ydata-profiling
+PyPDF2
+pdfkit
+werkzeug

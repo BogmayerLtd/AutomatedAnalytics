@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+uploads/
+static/reports/
+*.env
+*.sqlite3
+.DS_Store
+node_modules/
+output.pdf
+package-lock.json
+credentials.json

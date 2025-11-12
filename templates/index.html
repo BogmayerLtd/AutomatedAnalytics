@@ -1,0 +1,284 @@
+<!-- Keep in a singular consolidated file right now until handling the back end. -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Upload & Display Data</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+  <style>
+    header {
+      background-color: royalblue;
+      color: white;
+      text-align: center;
+      padding: 1rem 0;
+    }
+    body {
+      background-color: #f4f4f4;
+      font-family: Arial, sans-serif;
+    }
+    .card {
+      margin-top: 2rem;
+      border-radius: 10px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    }
+    h2 {
+      color: #003366;
+    }
+    .table-container {
+      max-height: 500px;
+      overflow: auto;
+    }
+    .plot-img {
+      max-width: 100%;
+      border: 1px solid #ccc;
+      margin-bottom: 1rem;
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Bogmayer Analytics Dashboard</h1>
+</header>
+
+<div class="container">
+  <!-- Upload -->
+  <div class="card p-4">
+    <section id="upload-section">
+      <h2>Upload Dataset</h2>
+      <input type="file" id="fileInput" class="form-control" accept=".csv, .xlsx, .xls" />
+      <div id="upload-error" class="alert alert-danger d-none mt-2"></div>
+    </section>
+
+    <section id="preview" class="d-none mt-4">
+      <h2>Data Preview</h2>
+      <div class="table-responsive table-container">
+        <table class="table table-striped" id="data-table"></table>
+      </div>
+    </section>
+  </div>
+
+  <!-- Stats/Insights/Plots/EDA -->
+  <div class="card p-4">
+    <section id="analysis" class="d-none">
+      <h2>Basic Data Analysis</h2>
+      <div id="summary-stats"></div>
+    </section>
+  </div>
+  <div class="card p-4">
+    <section id="data-insights" class="d-none">
+      <h2>Data Insights</h2>
+      <p id="insights-paragraph"></p>
+    </section>
+  </div>
+  <div class="card p-4">
+    <section id="data-visualization-plots" class="d-none">
+      <h2>Key Visualizations</h2>
+      <div id="plots-container"></div>
+    </section>
+  </div>
+  <div class="card p-4">
+    <section id="data-visualization" class="d-none">
+      <h2>Automated EDA Report</h2>
+      <p>Below is the automatically generated analysis report:</p>
+      <iframe id="report-frame" width="100%" height="800px" style="border:none;"></iframe>
+    </section>
+  </div>
+</div>
+
+<div class="card p-4 text-center">
+  <button id="download-html" class="btn btn-primary me-3">Download HTML Report</button>
+  <button id="download-pdf" class="btn btn-secondary">Download PDF Report</button>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+  let currentUploadId = null;
+  const fileInput = document.getElementById('fileInput');
+  const uploadError = document.getElementById('upload-error');
+  const preview = document.getElementById('preview');
+  const dataTable = document.getElementById('data-table');
+  const analysis = document.getElementById('analysis');
+  const summaryDiv = document.getElementById('summary-stats');
+  const insightsSection = document.getElementById('data-insights');
+  const insightsParagraph = document.getElementById('insights-paragraph');
+  const vizSection = document.getElementById('data-visualization');
+  const vizPlotSection = document.getElementById('data-visualization-plots');
+  const plotsContainer = document.getElementById('plots-container');
+  const iframe = document.getElementById('report-frame');
+  let dataset = [];
+
+  function showError(msg) {
+    uploadError.textContent = msg;
+    uploadError.classList.remove('d-none');
+  }
+  function hideError() {
+    uploadError.classList.add('d-none');
+  }
+  fileInput.addEventListener('change', handleFile);
+
+  function handleFile(e) {
+    hideError();
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      showError("File too large (limit is 10MB).");
+      return;
+    }
+    const reader = new FileReader();
+    if (file.name.endsWith('.csv')) {
+      reader.onload = function(event) {
+        const text = event.target.result;
+        const result = Papa.parse(text, { header: true });
+        dataset = result.data.filter(row => Object.keys(row).length > 1);
+        displayData();
+        runAnalysis();
+        uploadToBackend(file);
+      };
+      reader.readAsText(file);
+    } else {
+      reader.onload = function(event) {
+        const data = new Uint8Array(event.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        dataset = XLSX.utils.sheet_to_json(firstSheet);
+        displayData();
+        runAnalysis();
+        uploadToBackend(file);
+      };
+      reader.readAsArrayBuffer(file);
+    }
+  }
+
+  function displayData() {
+    if (dataset.length === 0) return;
+    preview.classList.remove('d-none');
+    const columns = Object.keys(dataset[0]);
+    let tableHTML = '<thead><tr>' + columns.map(col => `<th>${col}</th>`).join('') + '</tr></thead><tbody>';
+    for (const row of dataset.slice(0, 20)) {
+      tableHTML += '<tr>' + columns.map(col => `<td>${row[col] ?? ''}</td>`).join('') + '</tr>';
+    }
+    tableHTML += '</tbody>';
+    dataTable.innerHTML = tableHTML;
+  }
+
+  function runAnalysis() {
+    if (dataset.length === 0) return;
+    analysis.classList.remove('d-none');
+    const columns = Object.keys(dataset[0]);
+    let html = `<p><b>Rows:</b> ${dataset.length}, <b>Columns:</b> ${columns.length}</p>`;
+    html += `<table class="table table-bordered"><thead><tr>
+              <th>Column</th><th>Type (guess)</th><th>Missing</th><th>Example</th><th>Stats</th>
+             </tr></thead><tbody>`;
+    columns.forEach(col => {
+      const values = dataset.map(row => row[col]).filter(v => v !== undefined && v !== "");
+      const missing = dataset.length - values.length;
+      let type = "string";
+      let stats = "-";
+      if (values.every(v => !isNaN(parseFloat(v)))) {
+          type = "number";
+          const nums = values.map(v => parseFloat(v));
+          const min = Math.min(...nums);
+          const max = Math.max(...nums);
+          const mean = (nums.reduce((a,b) => a+b, 0) / nums.length).toFixed(2);
+          stats = `min: ${min}, max: ${max}, mean: ${mean}`;
+      } else if (values.every(v => !isNaN(Date.parse(v)))) {
+          type = "date";
+      }
+      html += `<tr>
+                <td>${col}</td>
+                <td>${type}</td>
+                <td>${missing}</td>
+                <td>${values[0] ?? ""}</td>
+                <td>${stats}</td>
+               </tr>`;
+    });
+    html += "</tbody></table>";
+    summaryDiv.innerHTML = html;
+  }
+
+  async function uploadToBackend(file) {
+    summaryDiv.insertAdjacentHTML("beforeend", "<p><b>Uploading to backend for deeper analytics...</b></p>");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch("/upload", {
+        method: "POST",
+        body: formData
+      });
+      const result = await response.json();
+      if (result.upload_id) currentUploadId = result.upload_id, console.log("Upload succeeded with upload_id:", currentUploadId);
+      if (result.error) {
+        summaryDiv.insertAdjacentHTML("beforeend", `<p style='color:red;'>Backend error: ${result.error}</p>`);
+        return;
+      }
+      vizSection.classList.remove("d-none");
+      iframe.src = result.report_url;
+      if (result.insights) {
+        insightsParagraph.textContent = result.insights;
+        insightsSection.classList.remove("d-none");
+      }
+      plotsContainer.innerHTML = "";
+      if (result.visualizations) {
+        vizPlotSection.classList.remove("d-none");
+        Object.entries(result.visualizations).forEach(([key, b64str]) => {
+          const img = document.createElement("img");
+          img.src = "data:image/png;base64," + b64str;
+          img.classList.add("plot-img");
+          img.alt = key;
+          plotsContainer.appendChild(img);
+        });
+      } else {
+        vizPlotSection.classList.add("d-none");
+      }
+    } catch (err) {
+      summaryDiv.insertAdjacentHTML("beforeend", `<p style='color:red;'>Upload failed: ${err.message}</p>`);
+    }
+  }
+
+  document.getElementById("download-html").addEventListener("click", function() {
+    if (!currentUploadId) {
+      alert("Please upload a file first.");
+      return;
+    }
+    const url = `/reports/${currentUploadId}_profiling_report.html`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `report_${currentUploadId}.html`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+
+  document.getElementById("download-pdf").addEventListener("click", function() {
+    if (!currentUploadId) {
+      alert("Please upload a file first.");
+      return;
+    }
+    fetch(`/pdf_report/${currentUploadId}`).then(res => {
+      if (!res.ok) throw new Error('Failed to generate PDF');
+      return res.blob();
+    }).then(blob => {
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `full_report_${currentUploadId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    }).catch(err => {
+      alert("Download failed: " + err.message);
+    });
+  });
+});
+</script>
+</body>
+</html>
+
+
+
+
