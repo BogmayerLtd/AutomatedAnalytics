@@ -7,3 +7,4 @@ PyPDF2
 pdfkit
 werkzeug
 gunicorn
+pkg_resources
