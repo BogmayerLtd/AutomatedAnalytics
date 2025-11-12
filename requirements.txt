@@ -6,3 +6,4 @@ ydata-profiling
 PyPDF2
 pdfkit
 werkzeug
+gunicorn
