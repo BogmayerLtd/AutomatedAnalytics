@@ -3,7 +3,6 @@ services:
     name: automatedanalytics
     env: python
     buildCommand: |
-      apt-get update && \
-      apt-get install -y wkhtmltopdf && \
+      apt-get update && apt-get install -y wkhtmltopdf
       pip install -r requirements.txt
     startCommand: gunicorn app:app
