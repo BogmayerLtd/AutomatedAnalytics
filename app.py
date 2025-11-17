@@ -16,6 +16,9 @@ import seaborn as sns
 from ydata_profiling import ProfileReport
 from werkzeug.utils import secure_filename
 
+import shutil
+print(shutil.which("wkhtmltopdf"))
+
 app = Flask(__name__)
 
 UPLOAD_FOLDER = "uploads"
@@ -220,7 +223,7 @@ def pdf_report(upload_id):
     </body>
     </html>
     """
-    wkhtml_path = '/usr/local/bin/wkhtmltopdf'  # Change as needed
+    wkhtml_path = '/usr/bin/wkhtmltopdf'  # Change as needed
     config = pdfkit.configuration(wkhtmltopdf=wkhtml_path)
     temp_pdf_path = "/tmp/raw_report.pdf"
     pdfkit.from_string(full_html, temp_pdf_path, configuration=config, options={'enable-local-file-access': None})
