@@ -16,9 +16,6 @@ import seaborn as sns
 from ydata_profiling import ProfileReport
 from werkzeug.utils import secure_filename
 
-import shutil
-print(shutil.which("wkhtmltopdf"))
-
 app = Flask(__name__)
 
 UPLOAD_FOLDER = "uploads"
@@ -38,18 +35,118 @@ def fig_to_base64(fig):
     buf.seek(0)
     return base64.b64encode(buf.read()).decode("utf-8")
 
-def plot_histogram(df, col):
-    fig, ax = plt.subplots(figsize=(6,4))
-    sns.histplot(df[col].dropna(), kde=True, bins=30, ax=ax)
-    ax.set_title(f'Histogram of {col}')
+#figure #1
+def plot_inventory_projection_lines(df):
+    fig, ax = plt.subplots(figsize=(12,6))
+    time_cols = ["StoreCount_30days", "StoreCount_60days", "StoreCount_90days"]
+    # Check columns exist in df
+    existing_cols = [col for col in time_cols if col in df.columns]
+    if not existing_cols:
+        # FALLBACK: Create a histogram of the first numeric column
+        return plot_numeric_distribution_fallback(df)
+    subset = df[["Location", "Product Name"] + existing_cols].dropna(subset=existing_cols, how="all")
+    if subset.empty:
+        return plot_numeric_distribution_fallback(df)
+    else:
+        for _, row in subset.iterrows():
+            ax.plot([int(col.split('_')[1].replace('days','')) for col in existing_cols], 
+                    [row[col] for col in existing_cols],
+                    label=f"{row['Product Name']} @ {row['Location']}", alpha=0.7)
+        ax.set_title("Inventory Projection Over Time")
+        ax.set_xlabel("Days")
+        ax.set_ylabel("Projected Inventory")
+        if subset.shape[0] <= 15:
+            ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        fig.tight_layout()
     return fig_to_base64(fig)
 
-def plot_correlation_heatmap(df):
-    fig, ax = plt.subplots(figsize=(8,6))
-    corr = df.select_dtypes(include=["number"]).corr()
-    sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", ax=ax)
-    ax.set_title("Correlation Heatmap")
+
+#figure #2
+def plot_inventory_bar(df):
+    fig, ax = plt.subplots(figsize=(10,6))
+    required_cols = ["Location", "Product Name", "On Floor Inventory (Cases)"]
+    missing = [col for col in required_cols if col not in df.columns]
+    if missing:
+        # FALLBACK: Create a grouped bar chart of top categories
+        return plot_category_comparison_fallback(df)
+    else:
+        subset = df[required_cols].dropna()
+        if subset.empty:
+            return plot_category_comparison_fallback(df)
+        else:
+            pivot = subset.pivot_table(index="Product Name", columns="Location",
+                                       values="On Floor Inventory (Cases)", aggfunc="sum", fill_value=0)
+            pivot.plot(kind="bar", ax=ax)
+            ax.set_title("Inventory by Product and Location")
+            ax.set_ylabel("On Floor Inventory (Cases)")
+            ax.set_xlabel("Product")
+            ax.legend(title="Location", bbox_to_anchor=(1.05, 1), loc="upper left")
+            fig.tight_layout()
     return fig_to_base64(fig)
+
+
+# FALLBACK PLOT #1: Numeric Distribution
+def plot_numeric_distribution_fallback(df):
+    fig, ax = plt.subplots(figsize=(12,6))
+    numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+    
+    if not numeric_cols:
+        ax.text(0.5, 0.5, "No numeric data available to visualize.", 
+                va="center", ha="center", fontsize=12)
+        ax.set_title("Data Distribution (No Numeric Data)")
+        return fig_to_base64(fig)
+    
+    # Plot distribution of the first numeric column
+    col = numeric_cols[0]
+    data = df[col].dropna()
+    
+    if len(data) == 0:
+        ax.text(0.5, 0.5, f"No valid data in column '{col}'", 
+                va="center", ha="center", fontsize=12)
+    else:
+        ax.hist(data, bins=30, edgecolor='black', alpha=0.7, color='steelblue')
+        ax.set_title(f"Distribution of {col}")
+        ax.set_xlabel(col)
+        ax.set_ylabel("Frequency")
+        ax.grid(axis='y', alpha=0.3)
+    
+    fig.tight_layout()
+    return fig_to_base64(fig)
+
+
+# FALLBACK PLOT #2: Category Comparison
+def plot_category_comparison_fallback(df):
+    fig, ax = plt.subplots(figsize=(10,6))
+    
+    # Find categorical and numeric columns
+    categorical_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+    numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+    
+    if not categorical_cols or not numeric_cols:
+        ax.text(0.5, 0.5, "Insufficient data for category comparison.\nNeeds at least one categorical and one numeric column.", 
+                va="center", ha="center", fontsize=12)
+        ax.set_title("Category Comparison (Insufficient Data)")
+        return fig_to_base64(fig)
+    
+    # Use first categorical and first numeric column
+    cat_col = categorical_cols[0]
+    num_col = numeric_cols[0]
+    
+    # Get top 10 categories by sum of numeric values
+    grouped = df.groupby(cat_col)[num_col].sum().sort_values(ascending=False).head(10)
+    
+    if len(grouped) == 0:
+        ax.text(0.5, 0.5, "No data to display", va="center", ha="center", fontsize=12)
+    else:
+        grouped.plot(kind="bar", ax=ax, color='coral', edgecolor='black')
+        ax.set_title(f"Top 10 {cat_col} by {num_col}")
+        ax.set_xlabel(cat_col)
+        ax.set_ylabel(f"Total {num_col}")
+        ax.tick_params(axis='x', rotation=45)
+    
+    fig.tight_layout()
+    return fig_to_base64(fig)
+
 
 def generate_local_insights(df):
     try:
@@ -126,9 +223,8 @@ def upload():
     visualizations = {}
     numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
     if numeric_cols:
-        visualizations["histogram"] = plot_histogram(df, numeric_cols[0])
-        if len(numeric_cols) > 1:
-            visualizations["corr_heatmap"] = plot_correlation_heatmap(df)
+        visualizations["inventory_bar"] = plot_inventory_bar(df)
+        visualizations["inventory_projection"] = plot_inventory_projection_lines(df)
     return jsonify({
         "message": "Success",
         "report_url": f"/reports/{report_filename}",
@@ -160,11 +256,11 @@ def build_dashboard_html(upload_id):
     hist_img = ""
     corr_img = ""
     if numeric_cols:
-        hist_b64 = plot_histogram(df, numeric_cols[0])
-        hist_img = f'<img src="data:image/png;base64,{hist_b64}" class="plot-img" alt="Histogram"/>'
-        if len(numeric_cols) > 1:
-            corr_b64 = plot_correlation_heatmap(df)
-            corr_img = f'<img src="data:image/png;base64,{corr_b64}" class="plot-img" alt="Correlation Heatmap"/>'
+        bar_b64 = plot_inventory_bar(df)
+        bar_img = f'<img src="data:image/png;base64,{bar_b64}" class="plot-img" alt="Inventory Bar Chart"/>'
+        proj_b64 = plot_inventory_projection_lines(df)
+        proj_img = f'<img src="data:image/png;base64,{proj_b64}" class="plot-img" alt="Inventory Projection Line Chart"/>'
+
     dashboard_html = f"""
     <div class="section">
       <h2>Data Preview (First 20 Rows)</h2>
@@ -176,8 +272,8 @@ def build_dashboard_html(upload_id):
     </div>
     <div class="section">
       <h2>Visualizations</h2>
-      {hist_img}
-      {corr_img}
+      {bar_img}
+      {proj_img}
     </div>
     """
     return dashboard_html
@@ -223,7 +319,7 @@ def pdf_report(upload_id):
     </body>
     </html>
     """
-    wkhtml_path = '/usr/bin/wkhtmltopdf'  # Change as needed
+    wkhtml_path = '/usr/local/bin/wkhtmltopdf'  # Change as needed
     config = pdfkit.configuration(wkhtmltopdf=wkhtml_path)
     temp_pdf_path = "/tmp/raw_report.pdf"
     pdfkit.from_string(full_html, temp_pdf_path, configuration=config, options={'enable-local-file-access': None})
