@@ -352,25 +352,76 @@ def build_dashboard_html(upload_id):
     """
     return dashboard_html
 
-def expand_all_variable_sections(html):
-    # Remove 'display:none', 'collapse', aria-expanded, or similar hiding for variable panels
-    html = re.sub(r'style="display:\s*none;"', 'style="display:block;"', html)
-    html = re.sub(r'(class="[^"]*)collapse([^"]*")', r'\1\2', html)  # removes 'collapse' class
-    html = re.sub(r'data-bs-toggle="collapse"', '', html)
-    html = re.sub(r'aria-expanded="false"', 'aria-expanded="true"', html)
-    # Optionally, expand other known hiding mechanisms if your HTML uses others
-    return html
+def extract_profiling_summary(upload_id):
+    """Extract key statistics from the dataframe instead of relying on ydata HTML"""
+    upload_files = os.listdir(UPLOAD_FOLDER)
+    matching_files = [f for f in upload_files if f.startswith(upload_id)]
+    if not matching_files:
+        return "<p>Data not found.</p>"
+    
+    filepath = os.path.join(UPLOAD_FOLDER, matching_files[0])
+    try:
+        if filepath.endswith(".csv"):
+            df = pd.read_csv(filepath)
+        else:
+            df = pd.read_excel(filepath)
+    except Exception as e:
+        return f"<p>Error loading data: {e}</p>"
+    
+    # Generate comprehensive statistics manually
+    summary_html = "<div style='font-size: 11px;'>"
+    
+    # Dataset Overview
+    summary_html += f"""
+    <h3>Dataset Overview</h3>
+    <table class='table table-striped'>
+        <tr><td><strong>Number of rows:</strong></td><td>{len(df)}</td></tr>
+        <tr><td><strong>Number of columns:</strong></td><td>{len(df.columns)}</td></tr>
+        <tr><td><strong>Total missing values:</strong></td><td>{df.isnull().sum().sum()}</td></tr>
+        <tr><td><strong>Memory usage:</strong></td><td>{df.memory_usage(deep=True).sum() / 1024:.2f} KB</td></tr>
+    </table>
+    """
+    
+    # Column Details
+    summary_html += "<h3>Column Details</h3><table class='table table-striped'>"
+    summary_html += "<tr><th>Column</th><th>Type</th><th>Missing</th><th>Unique</th></tr>"
+    
+    for col in df.columns:
+        col_type = str(df[col].dtype)
+        missing = df[col].isnull().sum()
+        unique = df[col].nunique()
+        summary_html += f"<tr><td>{col}</td><td>{col_type}</td><td>{missing}</td><td>{unique}</td></tr>"
+    
+    summary_html += "</table>"
+    
+    # Numeric Column Statistics
+    numeric_cols = df.select_dtypes(include=['number']).columns
+    if len(numeric_cols) > 0:
+        summary_html += "<h3>Numeric Column Statistics</h3>"
+        desc = df[numeric_cols].describe().round(2)
+        summary_html += desc.to_html(classes='table table-striped')
+    
+    # Categorical Column Statistics
+    cat_cols = df.select_dtypes(include=['object', 'category']).columns
+    if len(cat_cols) > 0:
+        summary_html += "<h3>Categorical Columns - Top Values</h3>"
+        for col in cat_cols[:5]:  # Limit to first 5 categorical columns
+            value_counts = df[col].value_counts().head(5)
+            summary_html += f"<h4>{col}</h4>"
+            summary_html += "<table class='table table-striped'>"
+            summary_html += "<tr><th>Value</th><th>Count</th></tr>"
+            for val, count in value_counts.items():
+                summary_html += f"<tr><td>{val}</td><td>{count}</td></tr>"
+            summary_html += "</table>"
+    
+    summary_html += "</div>"
+    return summary_html
 
 @app.route("/pdf_report/<upload_id>")
 def pdf_report(upload_id):
-    report_filename = f"{upload_id}_profiling_report.html"
-    report_path = os.path.join(REPORT_FOLDER, report_filename)
-    if not os.path.exists(report_path):
-        return "Report not found", 404
-    with open(report_path, "r", encoding="utf-8") as f:
-        backend_html = f.read()
-    backend_html = expand_all_variable_sections(backend_html)
     dashboard_html = build_dashboard_html(upload_id)
+    profiling_summary = extract_profiling_summary(upload_id)
+    
     full_html = f"""
     <!DOCTYPE html>
     <html>
@@ -380,36 +431,63 @@ def pdf_report(upload_id):
       <style>
         body {{ font-family: Arial, sans-serif; margin: 20px; color: #111; }}
         h1 {{ color: royalblue; text-align: center; margin-bottom: 40px; }}
-        .section {{ margin-bottom: 40px; }}
-        .table {{ width: 100%; border-collapse: collapse; }}
-        .table-striped tbody tr:nth-child(odd) {{ background-color: #f2f2f2; }}
-        .plot-img {{ max-width: 80%; margin-bottom: 20px; border: 1px solid #ccc; display: block; margin-left: auto; margin-right: auto; }}
+        h2 {{ color: #333; margin-top: 30px; border-bottom: 2px solid royalblue; padding-bottom: 5px; }}
+        h3 {{ color: #555; margin-top: 20px; }}
+        h4 {{ color: #666; margin-top: 15px; font-size: 13px; }}
+        .section {{ margin-bottom: 40px; page-break-inside: avoid; }}
+        .table {{ width: 100%; border-collapse: collapse; font-size: 9px; margin-bottom: 20px; }}
+        .table-striped tbody tr:nth-child(odd) {{ background-color: #f9f9f9; }}
+        .table th, .table td {{ padding: 6px 8px; border: 1px solid #ddd; text-align: left; }}
+        .table th {{ background-color: #4169e1; color: white; font-weight: bold; }}
+        .plot-img {{ max-width: 100%; margin-bottom: 20px; border: 1px solid #ccc; display: block; margin-left: auto; margin-right: auto; page-break-inside: avoid; }}
+        p {{ font-size: 11px; line-height: 1.6; }}
       </style>
     </head>
     <body>
       <h1>Bogmayer Analytics Dashboard - Full Report</h1>
       {dashboard_html}
-      <div class="section"><h2>Automated Profiling Report</h2>{backend_html}</div>
+      <div class="section" style="page-break-before: always;">
+        <h2>Detailed Data Profiling</h2>
+        {profiling_summary}
+      </div>
     </body>
     </html>
     """
-    wkhtml_path = '/usr/local/bin/wkhtmltopdf'  # Change as needed
+    
+    wkhtml_path = '/usr/local/bin/wkhtmltopdf'
     config = pdfkit.configuration(wkhtmltopdf=wkhtml_path)
     temp_pdf_path = "/tmp/raw_report.pdf"
-    pdfkit.from_string(full_html, temp_pdf_path, configuration=config, options={'enable-local-file-access': None})
+    
+    options = {
+        'enable-local-file-access': None,
+        'page-size': 'Letter',
+        'margin-top': '0.75in',
+        'margin-right': '0.75in',
+        'margin-bottom': '0.75in',
+        'margin-left': '0.75in',
+        'encoding': "UTF-8",
+        'no-outline': None
+    }
+    
+    pdfkit.from_string(full_html, temp_pdf_path, configuration=config, options=options)
 
-    # Remove blank pages and cap at 8 (always keep last page)
+    # Read the generated PDF and return it
     reader = PdfReader(temp_pdf_path)
     writer = PdfWriter()
-    kept_count = 0
-    max_pages = 8
-    for idx, page in enumerate(reader.pages):
-        text = page.extract_text()
-        if (text and text.strip()) or idx == len(reader.pages)-1:  # keep if not blank or last page
-            writer.add_page(page)
-            kept_count += 1
-        if kept_count >= max_pages:
-            break
+    
+    # Take up to 15 pages to accommodate the full profiling summary
+    max_pages = min(15, len(reader.pages))
+    
+    for idx in range(max_pages):
+        writer.add_page(reader.pages[idx])
+    
+    outstream = io.BytesIO()
+    writer.write(outstream)
+    outstream.seek(0)
+    response = make_response(outstream.read())
+    response.headers["Content-Type"] = "application/pdf"
+    response.headers["Content-Disposition"] = f"attachment; filename={upload_id}_full_report.pdf"
+    return response
     outstream = io.BytesIO()
     writer.write(outstream)
     outstream.seek(0)
