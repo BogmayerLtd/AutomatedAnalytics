@@ -44,19 +44,40 @@ def plot_inventory_projection_lines(df):
     if not existing_cols:
         # FALLBACK: Create a histogram of the first numeric column
         return plot_numeric_distribution_fallback(df)
-    subset = df[["Location", "Product Name"] + existing_cols].dropna(subset=existing_cols, how="all")
+    
+    # Determine which identifier column to use
+    id_col = None
+    if "Location / Product Name" in df.columns:
+        id_col = "Location / Product Name"
+    elif "Location" in df.columns and "Product Name" in df.columns:
+        id_col = ["Location", "Product Name"]
+    
+    if id_col is None:
+        return plot_numeric_distribution_fallback(df)
+    
+    # Create subset based on column structure
+    if isinstance(id_col, list):
+        subset = df[id_col + existing_cols].dropna(subset=existing_cols, how="all")
+    else:
+        subset = df[[id_col] + existing_cols].dropna(subset=existing_cols, how="all")
+    
     if subset.empty:
         return plot_numeric_distribution_fallback(df)
     else:
         for _, row in subset.iterrows():
+            if isinstance(id_col, list):
+                label = f"{row['Product Name']} @ {row['Location']}"
+            else:
+                label = row[id_col]
+            
             ax.plot([int(col.split('_')[1].replace('days','')) for col in existing_cols], 
                     [row[col] for col in existing_cols],
-                    label=f"{row['Product Name']} @ {row['Location']}", alpha=0.7)
+                    label=label, alpha=0.7)
         ax.set_title("Inventory Projection Over Time")
         ax.set_xlabel("Days")
         ax.set_ylabel("Projected Inventory")
         if subset.shape[0] <= 15:
-            ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+            ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
         fig.tight_layout()
     return fig_to_base64(fig)
 
@@ -64,24 +85,77 @@ def plot_inventory_projection_lines(df):
 #figure #2
 def plot_inventory_bar(df):
     fig, ax = plt.subplots(figsize=(10,6))
-    required_cols = ["Location", "Product Name", "On Floor Inventory (Cases)"]
-    missing = [col for col in required_cols if col not in df.columns]
-    if missing:
-        # FALLBACK: Create a grouped bar chart of top categories
+    
+    # Check for different column name variations
+    inventory_col = None
+    for col_name in ["On Floor Inventory (Cases)", "On Floor Inventory (Case Equivs)"]:
+        if col_name in df.columns:
+            inventory_col = col_name
+            break
+    
+    # Determine identifier column structure
+    has_combined = "Location / Product Name" in df.columns
+    has_separate = "Location" in df.columns and "Product Name" in df.columns
+    
+    if not inventory_col or (not has_combined and not has_separate):
         return plot_category_comparison_fallback(df)
-    else:
-        subset = df[required_cols].dropna()
+    
+    try:
+        subset = df.copy()
+        
+        # Ensure inventory column is numeric
+        subset[inventory_col] = pd.to_numeric(subset[inventory_col], errors='coerce')
+        subset = subset.dropna(subset=[inventory_col])
+        
         if subset.empty:
             return plot_category_comparison_fallback(df)
-        else:
+        
+        if has_combined:
+            # Try different split patterns
+            if ": " in subset["Location / Product Name"].iloc[0]:
+                split_data = subset["Location / Product Name"].str.split(": ", n=1, expand=True)
+            else:
+                # If no colon separator, use the whole string as product name
+                split_data = pd.DataFrame({0: ["Unknown Location"] * len(subset), 
+                                         1: subset["Location / Product Name"]})
+            
+            subset['Location'] = split_data[0]
+            subset['Product'] = split_data[1]
+            
+            # Filter out rows where product is None or empty
+            subset = subset[subset['Product'].notna() & (subset['Product'] != '')]
+            
+            if subset.empty:
+                return plot_category_comparison_fallback(df)
+            
+            # Group by product and location
+            pivot = subset.pivot_table(index="Product", columns="Location",
+                                       values=inventory_col, aggfunc="sum", fill_value=0)
+            
+        elif has_separate:
             pivot = subset.pivot_table(index="Product Name", columns="Location",
-                                       values="On Floor Inventory (Cases)", aggfunc="sum", fill_value=0)
-            pivot.plot(kind="bar", ax=ax)
-            ax.set_title("Inventory by Product and Location")
-            ax.set_ylabel("On Floor Inventory (Cases)")
-            ax.set_xlabel("Product")
-            ax.legend(title="Location", bbox_to_anchor=(1.05, 1), loc="upper left")
-            fig.tight_layout()
+                                       values=inventory_col, aggfunc="sum", fill_value=0)
+        
+        # Check if pivot has data
+        if pivot.empty or pivot.shape[0] == 0:
+            return plot_category_comparison_fallback(df)
+        
+        # Limit to top 15 products by total inventory
+        top_products = pivot.sum(axis=1).sort_values(ascending=False).head(15)
+        pivot = pivot.loc[top_products.index]
+        
+        pivot.plot(kind="bar", ax=ax)
+        ax.set_title("Inventory by Product and Location")
+        ax.set_ylabel(inventory_col)
+        ax.set_xlabel("Product")
+        ax.legend(title="Location", bbox_to_anchor=(1.05, 1), loc="upper left")
+        ax.tick_params(axis='x', rotation=45, labelsize=8)
+        fig.tight_layout()
+        
+    except Exception as e:
+        print(f"Error in plot_inventory_bar: {e}")
+        return plot_category_comparison_fallback(df)
+    
     return fig_to_base64(fig)
 
 
@@ -346,4 +420,3 @@ def pdf_report(upload_id):
 
 if __name__ == "__main__":
     app.run(debug=True)
-
