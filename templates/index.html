@@ -201,7 +201,7 @@ document.addEventListener("DOMContentLoaded", function() {
   }
 
   async function uploadToBackend(file) {
-    summaryDiv.insertAdjacentHTML("beforeend", "<p><b>Uploading to backend for deeper analytics...</b></p>");
+    summaryDiv.insertAdjacentHTML("beforeend", " ");
     try {
       const formData = new FormData();
       formData.append("file", file);
