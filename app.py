@@ -38,17 +38,118 @@ def fig_to_base64(fig):
     buf.seek(0)
     return base64.b64encode(buf.read()).decode("utf-8")
 
-def plot_histogram(df, col):
-    fig, ax = plt.subplots(figsize=(6,4))
-    sns.histplot(df[col].dropna(), kde=True, bins=30, ax=ax)
-    ax.set_title(f'Histogram of {col}')
+def plot_inventory_bar(df):
+    """
+    Clustered bar chart of On-Floor Inventory (Cases vs Case Equivs) by product.
+    Falls back to a simple bar if only one of the two columns exists.
+    """
+    # Try common column names – adjust if your real names differ
+    name_col = None
+    for c in df.columns:
+        if "Location / Product Name" in c or "Product Name" in c or "Product" in c:
+            name_col = c
+            break
+
+    if name_col is None:
+        # Fallback: use first non-numeric column as categorical
+        non_num = df.select_dtypes(exclude=["number"]).columns
+        if len(non_num) == 0:
+            return ""
+        name_col = non_num[0]
+
+    inv_cases_cols = [c for c in df.columns if "On Floor Inventory" in c and "Case Equiv" not in c]
+    inv_equiv_cols = [c for c in df.columns if "On Floor Inventory" in c and "Case Equiv" in c]
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+
+    if inv_cases_cols and inv_equiv_cols:
+        cases_col = inv_cases_cols[0]
+        equiv_col = inv_equiv_cols[0]
+
+        plot_df = df[[name_col, cases_col, equiv_col]].dropna()
+        plot_df = plot_df.iloc[:20]  # avoid huge axis
+
+        x = range(len(plot_df))
+        width = 0.35
+
+        ax.bar([i - width / 2 for i in x], plot_df[cases_col], width=width, label="Cases")
+        ax.bar([i + width / 2 for i in x], plot_df[equiv_col], width=width, label="Case Equivs")
+
+        ax.set_xticks(list(x))
+        ax.set_xticklabels(plot_df[name_col], rotation=45, ha="right")
+        ax.set_ylabel("Inventory")
+        ax.set_title("On-Floor Inventory by Product (Cases vs Case Equivs)")
+        ax.legend()
+    else:
+        # Fallback: single bar plot for whichever numeric inventory col exists
+        inv_cols = inv_cases_cols or inv_equiv_cols or df.select_dtypes(include=["number"]).columns.tolist()
+        if not inv_cols:
+            plt.close(fig)
+            return ""
+        val_col = inv_cols[0]
+        plot_df = df[[name_col, val_col]].dropna().iloc[:20]
+        sns.barplot(x=name_col, y=val_col, data=plot_df, ax=ax)
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
+        ax.set_ylabel(val_col)
+        ax.set_title(f"{val_col} by Product")
+
+    fig.tight_layout()
     return fig_to_base64(fig)
 
-def plot_correlation_heatmap(df):
-    fig, ax = plt.subplots(figsize=(8,6))
-    corr = df.select_dtypes(include=["number"]).corr()
-    sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", ax=ax)
-    ax.set_title("Correlation Heatmap")
+def plot_storecount_lines(df):
+    """
+    Multi-series line chart of StoreCount_30days/60days/90days by product,
+    or a reasonable fallback if those columns are missing.
+    """
+    # Detect store-count columns
+    sc30 = [c for c in df.columns if "StoreCount_30" in c or "StoreCount30" in c]
+    sc60 = [c for c in df.columns if "StoreCount_60" in c or "StoreCount60" in c]
+    sc90 = [c for c in df.columns if "StoreCount_90" in c or "StoreCount90" in c]
+
+    have_all = bool(sc30 and sc60 and sc90)
+
+    name_col = None
+    for c in df.columns:
+        if "Location / Product Name" in c or "Product Name" in c or "Product" in c:
+            name_col = c
+            break
+    if name_col is None:
+        non_num = df.select_dtypes(exclude=["number"]).columns
+        if len(non_num) == 0:
+            return ""
+        name_col = non_num[0]
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+
+    if have_all:
+        c30, c60, c90 = sc30[0], sc60[0], sc90[0]
+        plot_df = df[[name_col, c30, c60, c90]].dropna().iloc[:20]
+
+        x = range(len(plot_df))
+        ax.plot(x, plot_df[c30], marker="o", label="StoreCount 30 days")
+        ax.plot(x, plot_df[c60], marker="o", label="StoreCount 60 days")
+        ax.plot(x, plot_df[c90], marker="o", label="StoreCount 90 days")
+
+        ax.set_xticks(list(x))
+        ax.set_xticklabels(plot_df[name_col], rotation=45, ha="right")
+        ax.set_ylabel("Store Count")
+        ax.set_title("Store Count by Product Over Time")
+        ax.legend()
+    else:
+        # Fallback: total store count (sum of any storecount-like cols) as bar chart
+        store_cols = [c for c in df.columns if "StoreCount" in c]
+        if not store_cols:
+            plt.close(fig)
+            return ""
+        plot_df = df[[name_col] + store_cols].copy().iloc[:20]
+        plot_df["TotalStoreCount"] = plot_df[store_cols].sum(axis=1)
+
+        sns.barplot(x=name_col, y="TotalStoreCount", data=plot_df, ax=ax)
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
+        ax.set_ylabel("Total Store Count")
+        ax.set_title("Total Store Count by Product")
+
+    fig.tight_layout()
     return fig_to_base64(fig)
 
 def generate_local_insights(df):
@@ -80,9 +181,9 @@ def generate_local_insights(df):
             corr_matrix = df.select_dtypes(include=["number"]).corr().abs()
             high_corr = []
             for i in range(len(corr_matrix.columns)):
-                for j in range(i+1, len(corr_matrix.columns)):
-                    if corr_matrix.iloc[i,j] > 0.8:
-                        high_corr.append((corr_matrix.columns[i], corr_matrix.columns[j], corr_matrix.iloc[i,j]))
+                for j in range(i + 1, len(corr_matrix.columns)):
+                    if corr_matrix.iloc[i, j] > 0.8:
+                        high_corr.append((corr_matrix.columns[i], corr_matrix.columns[j], corr_matrix.iloc[i, j]))
             if high_corr:
                 paragraph += "\nHighly correlated numeric columns (>0.8):\n"
                 for c1, c2, val in high_corr:
@@ -123,12 +224,16 @@ def upload():
         profile.to_file(os.path.join(REPORT_FOLDER, report_filename))
     except Exception as e:
         return jsonify({"error": f"YData Profiling failed: {e}"}), 500
+
+    # New visualizations
     visualizations = {}
-    numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
-    if numeric_cols:
-        visualizations["histogram"] = plot_histogram(df, numeric_cols[0])
-        if len(numeric_cols) > 1:
-            visualizations["corr_heatmap"] = plot_correlation_heatmap(df)
+    inv_img = plot_inventory_bar(df)
+    if inv_img:
+        visualizations["inventory_bar"] = inv_img
+    store_img = plot_storecount_lines(df)
+    if store_img:
+        visualizations["storecount_trend"] = store_img
+
     return jsonify({
         "message": "Success",
         "report_url": f"/reports/{report_filename}",
@@ -156,15 +261,18 @@ def build_dashboard_html(upload_id):
         return f"<p>Error loading dataset: {e}</p>"
     preview_html = df.head(20).to_html(classes="table table-striped", border=0)
     insights = generate_local_insights(df)
-    numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
-    hist_img = ""
-    corr_img = ""
-    if numeric_cols:
-        hist_b64 = plot_histogram(df, numeric_cols[0])
-        hist_img = f'<img src="data:image/png;base64,{hist_b64}" class="plot-img" alt="Histogram"/>'
-        if len(numeric_cols) > 1:
-            corr_b64 = plot_correlation_heatmap(df)
-            corr_img = f'<img src="data:image/png;base64,{corr_b64}" class="plot-img" alt="Correlation Heatmap"/>'
+
+    # New plots for the dashboard
+    inv_b64 = plot_inventory_bar(df)
+    store_b64 = plot_storecount_lines(df)
+
+    inv_img = ""
+    store_img = ""
+    if inv_b64:
+        inv_img = f'<img src="data:image/png;base64,{inv_b64}" class="plot-img" alt="Inventory by Product"/>'
+    if store_b64:
+        store_img = f'<img src="data:image/png;base64,{store_b64}" class="plot-img" alt="Store Count Trends"/>'
+
     dashboard_html = f"""
     <div class="section">
       <h2>Data Preview (First 20 Rows)</h2>
@@ -176,8 +284,8 @@ def build_dashboard_html(upload_id):
     </div>
     <div class="section">
       <h2>Visualizations</h2>
-      {hist_img}
-      {corr_img}
+      {inv_img}
+      {store_img}
     </div>
     """
     return dashboard_html
@@ -235,7 +343,7 @@ def pdf_report(upload_id):
     max_pages = 8
     for idx, page in enumerate(reader.pages):
         text = page.extract_text()
-        if (text and text.strip()) or idx == len(reader.pages)-1:  # keep if not blank or last page
+        if (text and text.strip()) or idx == len(reader.pages) - 1:  # keep if not blank or last page
             writer.add_page(page)
             kept_count += 1
         if kept_count >= max_pages:
