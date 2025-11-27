@@ -37,6 +37,16 @@
       border: 1px solid #ccc;
       margin-bottom: 1rem;
     }
+    .btn-loading {
+      position: relative;
+      pointer-events: none;
+      opacity: 0.65;
+    }
+    .spinner-border-sm {
+      width: 1rem;
+      height: 1rem;
+      border-width: 0.15em;
+    }
   </style>
 </head>
 <body>
@@ -91,12 +101,17 @@
 
 <div class="card p-4 text-center">
   <button id="download-html" class="btn btn-primary me-3">Download HTML Report</button>
-  <button id="download-pdf" class="btn btn-secondary">Download PDF Report</button>
+  <button id="download-pdf" class="btn btn-secondary">
+    <span class="button-text">Download PDF Report</span>
+    <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+  </button>
+  <div id="pdf-status" class="mt-2 text-muted d-none"></div>
 </div>
 
 <script>
 document.addEventListener("DOMContentLoaded", function() {
   let currentUploadId = null;
+  let pdfReady = false;
   const fileInput = document.getElementById('fileInput');
   const uploadError = document.getElementById('upload-error');
   const preview = document.getElementById('preview');
@@ -122,6 +137,7 @@ document.addEventListener("DOMContentLoaded", function() {
 
   function handleFile(e) {
     hideError();
+    pdfReady = false; // Reset PDF ready state
     const file = e.target.files[0];
     if (!file) return;
     if (file.size > 10 * 1024 * 1024) {
@@ -201,7 +217,7 @@ document.addEventListener("DOMContentLoaded", function() {
   }
 
   async function uploadToBackend(file) {
-    summaryDiv.insertAdjacentHTML("beforeend", " ");
+    summaryDiv.insertAdjacentHTML("beforeend", "<p><b> </b></p>");
     try {
       const formData = new FormData();
       formData.append("file", file);
@@ -210,7 +226,18 @@ document.addEventListener("DOMContentLoaded", function() {
         body: formData
       });
       const result = await response.json();
-      if (result.upload_id) currentUploadId = result.upload_id, console.log("Upload succeeded with upload_id:", currentUploadId);
+      if (result.upload_id) {
+        currentUploadId = result.upload_id;
+        console.log("Upload succeeded with upload_id:", currentUploadId);
+        
+        // CRITICAL: Mark PDF as ready after all visualizations load
+        setTimeout(() => {
+          pdfReady = true;
+          document.getElementById('pdf-status').textContent = '✓ PDF generation ready';
+          document.getElementById('pdf-status').classList.remove('d-none');
+          console.log("PDF marked as ready");
+        }, 2000); // 2 second buffer after upload completes
+      }
       if (result.error) {
         summaryDiv.insertAdjacentHTML("beforeend", `<p style='color:red;'>Backend error: ${result.error}</p>`);
         return;
@@ -258,6 +285,19 @@ document.addEventListener("DOMContentLoaded", function() {
       alert("Please upload a file first.");
       return;
     }
+    
+    // Show loading state
+    const button = this;
+    const buttonText = button.querySelector('.button-text');
+    const spinner = button.querySelector('.spinner-border');
+    const statusDiv = document.getElementById('pdf-status');
+    
+    buttonText.textContent = 'Generating PDF...';
+    spinner.classList.remove('d-none');
+    button.classList.add('btn-loading');
+    statusDiv.textContent = 'This may take 30-60 seconds...';
+    statusDiv.classList.remove('d-none');
+    
     fetch(`/pdf_report/${currentUploadId}`).then(res => {
       if (!res.ok) throw new Error('Failed to generate PDF');
       return res.blob();
@@ -270,14 +310,27 @@ document.addEventListener("DOMContentLoaded", function() {
       a.click();
       a.remove();
       window.URL.revokeObjectURL(url);
+      
+      // Reset button state
+      buttonText.textContent = 'Download PDF Report';
+      spinner.classList.add('d-none');
+      button.classList.remove('btn-loading');
+      statusDiv.textContent = '✓ PDF downloaded successfully';
+      setTimeout(() => statusDiv.classList.add('d-none'), 3000);
     }).catch(err => {
       alert("Download failed: " + err.message);
+      
+      // Reset button state on error
+      buttonText.textContent = 'Download PDF Report';
+      spinner.classList.add('d-none');
+      button.classList.remove('btn-loading');
+      statusDiv.textContent = '✗ PDF generation failed';
+      statusDiv.style.color = 'red';
     });
   });
 });
 </script>
 </body>
-</html>
 
 
 
