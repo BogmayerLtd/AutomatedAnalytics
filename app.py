@@ -91,54 +91,76 @@ def _detect_storecount_cols(df):
 
 def plot_inventory_bar(df):
     """
-    Vertical bar chart: Inventory (Cases) by Product (optionally split by Location if present).
-    This is designed to look like your second screenshot: product on X, inventory on Y.
+    Clustered bar chart of On-Floor Inventory (Cases vs Case Equivs) by product.
+    Falls back to a simple bar if only one of the two columns exists.
+    Products with 0 inventory are excluded.
     """
-    product_col = _detect_product_col(df)
-    if product_col is None:
-        return ""
-    inventory_col = _detect_inventory_cases_col(df)
-    if inventory_col is None:
-        return ""
+    # Try common column names – adjust if your real names differ
+    name_col = None
+    for c in df.columns:
+        if "Location / Product Name" in c or "Product Name" in c or "Product" in c:
+            name_col = c
+            break
 
-    location_col = _detect_location_col(df)
+    if name_col is None:
+        # Fallback: use first non-numeric column as categorical
+        non_num = df.select_dtypes(exclude=["number"]).columns
+        if len(non_num) == 0:
+            return ""
+        name_col = non_num[0]
 
-    # Build a small tidy dataframe
-    plot_df = df[[product_col, inventory_col]].copy()
-    if location_col is not None:
-        plot_df[location_col] = df[location_col]
-    else:
-        plot_df["Location"] = "Unknown Location"
-
-    # Drop missing and limit number of products shown
-    plot_df = plot_df.dropna(subset=[inventory_col])
-    plot_df = plot_df.iloc[:20]
+    inv_cases_cols = [c for c in df.columns if "On Floor Inventory" in c and "Case Equiv" not in c]
+    inv_equiv_cols = [c for c in df.columns if "On Floor Inventory" in c and "Case Equiv" in c]
 
     fig, ax = plt.subplots(figsize=(8, 4))
 
-    if location_col is not None:
-        # Grouped bar per location
-        sns.barplot(
-            data=plot_df,
-            x=product_col,
-            y=inventory_col,
-            hue=location_col,
-            ax=ax
-        )
-        ax.legend(title="Location")
-    else:
-        sns.barplot(
-            data=plot_df,
-            x=product_col,
-            y=inventory_col,
-            ax=ax,
-            color="steelblue"
-        )
+    if inv_cases_cols and inv_equiv_cols:
+        cases_col = inv_cases_cols[0]
+        equiv_col = inv_equiv_cols[0]
 
-    ax.set_xlabel("Product")
-    ax.set_ylabel("On Floor Inventory (Cases)")
-    ax.set_title("Inventory by Product and Location")
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
+        plot_df = df[[name_col, cases_col, equiv_col]].dropna()
+
+        # drop products where BOTH measures are zero (or missing treated as 0)
+        plot_df = plot_df[(plot_df[cases_col] != 0) | (plot_df[equiv_col] != 0)]
+
+        plot_df = plot_df.iloc[:20]  # avoid huge axis
+        if plot_df.empty:
+            plt.close(fig)
+            return ""
+
+        x = range(len(plot_df))
+        width = 0.35
+
+        ax.bar([i - width / 2 for i in x], plot_df[cases_col], width=width, label="Cases")
+        ax.bar([i + width / 2 for i in x], plot_df[equiv_col], width=width, label="Case Equivs")
+
+        ax.set_xticks(list(x))
+        ax.set_xticklabels(plot_df[name_col], rotation=45, ha="right")
+        ax.set_ylabel("Inventory")
+        ax.set_title("On-Floor Inventory by Product (Cases vs Case Equivs)")
+        ax.legend()
+    else:
+        # Fallback: single bar plot for whichever numeric inventory col exists
+        inv_cols = inv_cases_cols or inv_equiv_cols or df.select_dtypes(include=["number"]).columns.tolist()
+        if not inv_cols:
+            plt.close(fig)
+            return ""
+        val_col = inv_cols[0]
+        plot_df = df[[name_col, val_col]].dropna()
+
+        # drop products where value is zero
+        plot_df = plot_df[plot_df[val_col] != 0]
+
+        plot_df = plot_df.iloc[:20]
+        if plot_df.empty:
+            plt.close(fig)
+            return ""
+
+        sns.barplot(x=name_col, y=val_col, data=plot_df, ax=ax)
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
+        ax.set_ylabel(val_col)
+        ax.set_title(f"{val_col} by Product")
+
     fig.tight_layout()
     return fig_to_base64(fig)
 
