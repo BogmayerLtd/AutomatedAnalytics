@@ -43,8 +43,9 @@ def plot_inventory_bar(df):
     On Floor Inventory (Cases) on y-axis, skipping the first two rows.
     Otherwise, just plot the second column vs. the third column, skipping two rows.
     """
-    if "Location" in df.columns and (df["Location"] == "Southern Crown Partners: Charleston, SC").any():
-        sub = df[df["Location"] == "Southern Crown Partners: Charleston, SC"].iloc[2:].copy()
+    if "Distributor Location" in df.columns and (df["Distributor Location"] == "Southern Crown Partners: Charleston, SC").any():
+        sub = df[df["Distributor Location"] == "Southern Crown Partners: Charleston, SC"].iloc[2:].copy()
+        #Southern Crown Partners: Charleston, SC
         if "Product Name" in sub.columns and "On Floor Inventory (Cases)" in sub.columns:
             x = sub["Product Name"]
             y = sub["On Floor Inventory (Cases)"].fillna(0)
@@ -71,7 +72,7 @@ def plot_inventory_bar(df):
     plt.xticks(rotation=90)
     ax.set_xlabel(df.columns[1])  # column index 1
     ax.set_ylabel(df.columns[2])  # column index 2
-    ax.set_title("Inventory (Fallback: Second vs Third Column)")
+    ax.set_title("Inventory Plot")
     fig.tight_layout()
     return fig_to_base64(fig)
 
@@ -120,7 +121,7 @@ def plot_storecount_lines(df):
         
         ax.set_xticks(list(x))
         ax.set_xticklabels(x_labels, rotation=90)
-        ax.set_ylabel("Store Count")
+        ax.set_ylabel("# of Retailers")
         ax.set_xlabel(label_col)
         ax.set_title("Store Count by Product 30/60/90 Days")
         ax.legend()
