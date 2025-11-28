@@ -1,5 +1,5 @@
 #update this late
-from flask import Flask, render_template, request, jsonify, send_from_directory, send_file, make_response
+from flask import Flask, render_template, request, jsonify, send_from_directory, make_response
 import pandas as pd
 import os
 import uuid
@@ -38,188 +38,182 @@ def fig_to_base64(fig):
     buf.seek(0)
     return base64.b64encode(buf.read()).decode("utf-8")
 
-# ---------- NEW VISUALIZATIONS ----------
-
-def _detect_product_col(df):
-    # Try to find a reasonable product/name column
-    for c in df.columns:
-        lname = c.lower()
-        if "product" in lname or "sku" in lname or "item" in lname:
-            return c
-        if "location / product name" in lname:
-            return c
-    non_num = df.select_dtypes(exclude=["number"]).columns
-    if len(non_num) > 0:
-        return non_num[0]
-    return None
-
-def _detect_location_col(df):
-    for c in df.columns:
-        lname = c.lower()
-        if "location" in lname and "product" not in lname:
-            return c
-    return None
-
-def _detect_inventory_cases_col(df):
-    # Prefer a column explicitly marked as cases
-    for c in df.columns:
-        lname = c.lower()
-        if "on floor inventory" in lname and "case" in lname and "equiv" not in lname and "equiv" not in lname:
-            return c
-    # Fallback: any inventory-like numeric column
-    for c in df.columns:
-        lname = c.lower()
-        if "inventory" in lname:
-            if pd.api.types.is_numeric_dtype(df[c]):
-                return c
-    num_cols = df.select_dtypes(include=["number"]).columns
-    return num_cols[0] if len(num_cols) else None
-
-def _detect_storecount_cols(df):
-    cols_30 = []
-    cols_60 = []
-    cols_90 = []
-    for c in df.columns:
-        lname = c.lower()
-        if "storecount_30" in lname or "storecount30" in lname or "30days" in lname:
-            cols_30.append(c)
-        if "storecount_60" in lname or "storecount60" in lname or "60days" in lname:
-            cols_60.append(c)
-        if "storecount_90" in lname or "storecount90" in lname or "90days" in lname:
-            cols_90.append(c)
-    return cols_30, cols_60, cols_90
+# ---------- VISUALIZATIONS TUNED TO YOUR DATA ----------
 
 def plot_inventory_bar(df):
     """
-    Clustered bar chart of On-Floor Inventory (Cases vs Case Equivs) by product.
-    Falls back to a simple bar if only one of the two columns exists.
-    Products with 0 inventory are excluded.
+    Grouped bar chart of On Floor Inventory (Cases vs Case Equivs) by Product.
+    - Uses 'Product Name' if present; otherwise first non-numeric column.
+    - Drops rows where both inventory measures are 0 or NaN.
+    - Limits to top 15 products by Cases to keep the x-axis readable.
     """
-    # Try common column names – adjust if your real names differ
-    name_col = None
+    # pick product column
+    product_col = None
     for c in df.columns:
-        if "Location / Product Name" in c or "Product Name" in c or "Product" in c:
-            name_col = c
+        if "Product Name" in c or "Product" in c:
+            product_col = c
             break
-
-    if name_col is None:
-        # Fallback: use first non-numeric column as categorical
+    if product_col is None:
         non_num = df.select_dtypes(exclude=["number"]).columns
         if len(non_num) == 0:
             return ""
-        name_col = non_num[0]
+        product_col = non_num[0]
 
-    inv_cases_cols = [c for c in df.columns if "On Floor Inventory" in c and "Case Equiv" not in c]
-    inv_equiv_cols = [c for c in df.columns if "On Floor Inventory" in c and "Case Equiv" in c]
+    # inventory columns
+    cases_col = None
+    equiv_col = None
+    for c in df.columns:
+        if "On Floor Inventory (Cases" in c:
+            cases_col = c
+        if "On Floor Inventory (Case Equiv" in c:
+            equiv_col = c
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    if cases_col is None and equiv_col is None:
+        return ""
 
-    if inv_cases_cols and inv_equiv_cols:
-        cases_col = inv_cases_cols[0]
-        equiv_col = inv_equiv_cols[0]
+    cols = [product_col]
+    if cases_col is not None:
+        cols.append(cases_col)
+    if equiv_col is not None:
+        cols.append(equiv_col)
 
-        plot_df = df[[name_col, cases_col, equiv_col]].dropna()
+    plot_df = df[cols].copy()
 
-        # drop products where BOTH measures are zero (or missing treated as 0)
-        plot_df = plot_df[(plot_df[cases_col] != 0) | (plot_df[equiv_col] != 0)]
+    # treat NaN as 0 when deciding to drop
+    if cases_col is not None:
+        plot_df[cases_col] = plot_df[cases_col].fillna(0)
+    if equiv_col is not None:
+        plot_df[equiv_col] = plot_df[equiv_col].fillna(0)
 
-        plot_df = plot_df.iloc[:20]  # avoid huge axis
-        if plot_df.empty:
-            plt.close(fig)
-            return ""
+    if cases_col is not None and equiv_col is not None:
+        mask = (plot_df[cases_col] != 0) | (plot_df[equiv_col] != 0)
+    elif cases_col is not None:
+        mask = plot_df[cases_col] != 0
+    else:
+        mask = plot_df[equiv_col] != 0
 
-        x = range(len(plot_df))
-        width = 0.35
+    plot_df = plot_df[mask]
+    if plot_df.empty:
+        return ""
 
+    # focus on top 15 products by cases (or equiv if no cases)
+    sort_col = cases_col if cases_col is not None else equiv_col
+    plot_df = plot_df.sort_values(sort_col, ascending=False).head(15)
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+
+    x = range(len(plot_df))
+    width = 0.35
+
+    if cases_col is not None and equiv_col is not None:
         ax.bar([i - width / 2 for i in x], plot_df[cases_col], width=width, label="Cases")
         ax.bar([i + width / 2 for i in x], plot_df[equiv_col], width=width, label="Case Equivs")
-
-        ax.set_xticks(list(x))
-        ax.set_xticklabels(plot_df[name_col], rotation=45, ha="right")
-        ax.set_ylabel("Inventory")
-        ax.set_title("On-Floor Inventory by Product (Cases vs Case Equivs)")
-        ax.legend()
+    elif cases_col is not None:
+        ax.bar(x, plot_df[cases_col], width=width, label="Cases")
     else:
-        # Fallback: single bar plot for whichever numeric inventory col exists
-        inv_cols = inv_cases_cols or inv_equiv_cols or df.select_dtypes(include=["number"]).columns.tolist()
-        if not inv_cols:
-            plt.close(fig)
-            return ""
-        val_col = inv_cols[0]
-        plot_df = df[[name_col, val_col]].dropna()
+        ax.bar(x, plot_df[equiv_col], width=width, label="Case Equivs")
 
-        # drop products where value is zero
-        plot_df = plot_df[plot_df[val_col] != 0]
-
-        plot_df = plot_df.iloc[:20]
-        if plot_df.empty:
-            plt.close(fig)
-            return ""
-
-        sns.barplot(x=name_col, y=val_col, data=plot_df, ax=ax)
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
-        ax.set_ylabel(val_col)
-        ax.set_title(f"{val_col} by Product")
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(plot_df[product_col], rotation=45, ha="right")
+    ax.set_ylabel("On Floor Inventory")
+    ax.set_title("On Floor Inventory by Product (Cases vs Case Equivs)")
+    ax.legend()
 
     fig.tight_layout()
     return fig_to_base64(fig)
 
 def plot_storecount_lines(df):
     """
-    Line chart: StoreCount over 30, 60, 90 days by product.
-    If any of the StoreCount columns are missing, falls back to total store count bar chart.
+    StoreCount over 30/60/90 days for top products by inventory.
+    - Uses the same product_col as inventory plot.
+    - If StoreCount_30/60/90 columns missing, falls back to Total StoreCount bar plot.
     """
-    product_col = _detect_product_col(df)
+    # product column
+    product_col = None
+    for c in df.columns:
+        if "Product Name" in c or "Product" in c:
+            product_col = c
+            break
     if product_col is None:
-        return ""
+        non_num = df.select_dtypes(exclude=["number"]).columns
+        if len(non_num) == 0:
+            return ""
+        product_col = non_num[0]
 
-    sc30_cols, sc60_cols, sc90_cols = _detect_storecount_cols(df)
-    have_all = bool(sc30_cols and sc60_cols and sc90_cols)
+    # inventory col to rank products
+    cases_col = None
+    for c in df.columns:
+        if "On Floor Inventory (Cases" in c:
+            cases_col = c
+            break
+    if cases_col is None:
+        num_cols = df.select_dtypes(include=["number"]).columns
+        if len(num_cols) == 0:
+            return ""
+        cases_col = num_cols[0]
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    # storecount columns
+    sc30 = None
+    sc60 = None
+    sc90 = None
+    for c in df.columns:
+        if "StoreCount_30" in c or "StoreCount_3" in c:
+            sc30 = c
+        if "StoreCount_60" in c or "StoreCount_6" in c:
+            sc60 = c
+        if "StoreCount_90" in c or "StoreCount_9" in c:
+            sc90 = c
+
+    have_all = bool(sc30 and sc60 and sc90)
+
+    # choose top products by cases
+    base_df = df[[product_col, cases_col]].copy()
+    base_df[cases_col] = base_df[cases_col].fillna(0)
+    base_df = base_df.sort_values(cases_col, ascending=False).head(10)
+    top_products = base_df[product_col].unique().tolist()
+
+    fig, ax = plt.subplots(figsize=(9, 4))
 
     if have_all:
-        c30, c60, c90 = sc30_cols[0], sc60_cols[0], sc90_cols[0]
-        plot_df = df[[product_col, c30, c60, c90]].copy()
-        plot_df = plot_df.dropna(subset=[c30, c60, c90])
-        plot_df = plot_df.iloc[:20]
+        plot_df = df[df[product_col].isin(top_products)][[product_col, sc30, sc60, sc90]].copy()
+        plot_df[sc30] = plot_df[sc30].fillna(0)
+        plot_df[sc60] = plot_df[sc60].fillna(0)
+        plot_df[sc90] = plot_df[sc90].fillna(0)
+
+        # collapse to one row per product (e.g., sum or max)
+        plot_df = plot_df.groupby(product_col, as_index=False).max()
 
         x = range(len(plot_df))
-        ax.plot(x, plot_df[c30], marker="o", label="30 days")
-        ax.plot(x, plot_df[c60], marker="o", label="60 days")
-        ax.plot(x, plot_df[c90], marker="o", label="90 days")
+        ax.plot(x, plot_df[sc30], marker="o", label="30 days")
+        ax.plot(x, plot_df[sc60], marker="o", label="60 days")
+        ax.plot(x, plot_df[sc90], marker="o", label="90 days")
 
         ax.set_xticks(list(x))
         ax.set_xticklabels(plot_df[product_col], rotation=45, ha="right")
-        ax.set_xlabel("Product")
-        ax.set_ylabel("Projected Inventory / Store Count")
-        ax.set_title("Inventory Projection Over Time")
+        ax.set_ylabel("Store Count")
+        ax.set_title("Store Count by Product Over Time")
         ax.legend()
     else:
-        # Fallback: sum any storecount-like columns and do a bar chart
-        store_cols = [c for c in df.columns if "storecount" in c.lower()]
+        # fallback: sum any StoreCount* columns and show bar
+        store_cols = [c for c in df.columns if "StoreCount" in c]
         if not store_cols:
             plt.close(fig)
             return ""
-        plot_df = df[[product_col] + store_cols].copy().iloc[:20]
-        plot_df["TotalStoreCount"] = plot_df[store_cols].sum(axis=1)
 
-        sns.barplot(
-            data=plot_df,
-            x=product_col,
-            y="TotalStoreCount",
-            ax=ax,
-            color="orange"
-        )
-        ax.set_xlabel("Product")
+        plot_df = df[df[product_col].isin(top_products)][[product_col] + store_cols].copy()
+        plot_df[store_cols] = plot_df[store_cols].fillna(0)
+        plot_df["TotalStoreCount"] = plot_df[store_cols].sum(axis=1)
+        plot_df = plot_df.groupby(product_col, as_index=False)["TotalStoreCount"].sum()
+
+        sns.barplot(x=product_col, y="TotalStoreCount", data=plot_df, ax=ax, color="orange")
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
         ax.set_ylabel("Total Store Count")
         ax.set_title("Total Store Count by Product")
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
 
     fig.tight_layout()
     return fig_to_base64(fig)
 
-# ---------- EXISTING INSIGHTS / ROUTES ----------
+# ---------- INSIGHTS / ROUTES (UNCHANGED EXCEPT FOR USING NEW PLOTS) ----------
 
 def generate_local_insights(df):
     try:
@@ -336,9 +330,9 @@ def build_dashboard_html(upload_id):
     inv_img = ""
     store_img = ""
     if inv_b64:
-        inv_img = f'<img src="data:image/png;base64,{inv_b64}" class="plot-img" alt="Inventory by Product and Location"/>'
+        inv_img = f'<img src="data:image/png;base64,{inv_b64}" class="plot-img" alt="Inventory by Product"/>'
     if store_b64:
-        store_img = f'<img src="data:image/png;base64,{store_b64}" class="plot-img" alt="Inventory Projection Over Time"/>'
+        store_img = f'<img src="data:image/png;base64,{store_b64}" class="plot-img" alt="Store Count Trends"/>'
 
     dashboard_html = f"""
     <div class="section">
@@ -358,12 +352,10 @@ def build_dashboard_html(upload_id):
     return dashboard_html
 
 def expand_all_variable_sections(html):
-    # Remove 'display:none', 'collapse', aria-expanded, or similar hiding for variable panels
     html = re.sub(r'style="display:\s*none;"', 'style="display:block;"', html)
-    html = re.sub(r'(class="[^"]*)collapse([^"]*")', r'\1\2', html)  # removes 'collapse' class
+    html = re.sub(r'(class="[^"]*)collapse([^"]*")', r'\1\2', html)
     html = re.sub(r'data-bs-toggle="collapse"', '', html)
     html = re.sub(r'aria-expanded="false"', 'aria-expanded="true"', html)
-    # Optionally, expand other known hiding mechanisms if your HTML uses others
     return html
 
 @app.route("/pdf_report/<upload_id>")
@@ -398,19 +390,18 @@ def pdf_report(upload_id):
     </body>
     </html>
     """
-    wkhtml_path = '/usr/bin/wkhtmltopdf'  # Change as needed
+    wkhtml_path = '/usr/local/bin/wkhtmltopdf'  # adjust to your actual path
     config = pdfkit.configuration(wkhtmltopdf=wkhtml_path)
     temp_pdf_path = "/tmp/raw_report.pdf"
     pdfkit.from_string(full_html, temp_pdf_path, configuration=config, options={'enable-local-file-access': None})
 
-    # Remove blank pages and cap at 8 (always keep last page)
     reader = PdfReader(temp_pdf_path)
     writer = PdfWriter()
     kept_count = 0
     max_pages = 8
     for idx, page in enumerate(reader.pages):
         text = page.extract_text()
-        if (text and text.strip()) or idx == len(reader.pages) - 1:  # keep if not blank or last page
+        if (text and text.strip()) or idx == len(reader.pages) - 1:
             writer.add_page(page)
             kept_count += 1
         if kept_count >= max_pages:
