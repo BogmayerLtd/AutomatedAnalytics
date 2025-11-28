@@ -1,5 +1,4 @@
 #update this late
-#update this late
 from flask import Flask, render_template, request, jsonify, send_from_directory, send_file, make_response
 import pandas as pd
 import os
@@ -34,104 +33,193 @@ def allowed_file(filename):
 
 def fig_to_base64(fig):
     buf = io.BytesIO()
-    fig.savefig(buf, format="png")
+    fig.savefig(buf, format="png", bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
     return base64.b64encode(buf.read()).decode("utf-8")
 
+# ---------- NEW VISUALIZATIONS ----------
+
+def _detect_product_col(df):
+    # Try to find a reasonable product/name column
+    for c in df.columns:
+        lname = c.lower()
+        if "product" in lname or "sku" in lname or "item" in lname:
+            return c
+        if "location / product name" in lname:
+            return c
+    non_num = df.select_dtypes(exclude=["number"]).columns
+    if len(non_num) > 0:
+        return non_num[0]
+    return None
+
+def _detect_location_col(df):
+    for c in df.columns:
+        lname = c.lower()
+        if "location" in lname and "product" not in lname:
+            return c
+    return None
+
+def _detect_inventory_cases_col(df):
+    # Prefer a column explicitly marked as cases
+    for c in df.columns:
+        lname = c.lower()
+        if "on floor inventory" in lname and "case" in lname and "equiv" not in lname and "equiv" not in lname:
+            return c
+    # Fallback: any inventory-like numeric column
+    for c in df.columns:
+        lname = c.lower()
+        if "inventory" in lname:
+            if pd.api.types.is_numeric_dtype(df[c]):
+                return c
+    num_cols = df.select_dtypes(include=["number"]).columns
+    return num_cols[0] if len(num_cols) else None
+
+def _detect_storecount_cols(df):
+    cols_30 = []
+    cols_60 = []
+    cols_90 = []
+    for c in df.columns:
+        lname = c.lower()
+        if "storecount_30" in lname or "storecount30" in lname or "30days" in lname:
+            cols_30.append(c)
+        if "storecount_60" in lname or "storecount60" in lname or "60days" in lname:
+            cols_60.append(c)
+        if "storecount_90" in lname or "storecount90" in lname or "90days" in lname:
+            cols_90.append(c)
+    return cols_30, cols_60, cols_90
+
 def plot_inventory_bar(df):
     """
-    If 'Location' contains 'Southern Crown Partners: Charleston, SC', plot only that subset,
-    with Product Name on x-axis, On Floor Inventory (Cases) on y-axis, skipping the first two rows.
-    Otherwise, just plot the first column vs. the second column, skipping two rows.
+    Clustered bar chart of On-Floor Inventory (Cases vs Case Equivs) by product.
+    Falls back to a simple bar if only one of the two columns exists.
+    Products with 0 inventory are excluded.
     """
-    if "Location" in df.columns and (df["Location"] == "Southern Crown Partners: Charleston, SC").any():
-        sub = df[df["Location"] == "Southern Crown Partners: Charleston, SC"].iloc[2:].copy()
-        if "Product Name" in sub.columns and "On Floor Inventory (Cases)" in sub.columns:
-            x = sub["Product Name"]
-            y = sub["On Floor Inventory (Cases)"].fillna(0)
-            fig, ax = plt.subplots(figsize=(8,6))
-            ax.bar(x, y, width=0.9, edgecolor="white", linewidth=0.7)
-            plt.xticks(rotation=90)
-            ax.set_xlabel("Product Name")
-            ax.set_ylabel("# of Cases")
-            ax.set_title("Charleston Inventory")
-            fig.tight_layout()
-            return fig_to_base64(fig)
-    # Fallback: plot first and second columns (skipping first two rows)
-    plot_df = df.iloc[2:].copy()
-    if plot_df.shape[1] < 2:
-        return ""
-    x = plot_df.iloc[:, 0].astype(str)
-    y = pd.to_numeric(plot_df.iloc[:, 1], errors="coerce").fillna(0)  # force numbers
-    fig, ax = plt.subplots(figsize=(8,6))
-    ax.bar(x, y, width=0.9, edgecolor="white", linewidth=0.7)
-    plt.xticks(rotation=90)
-    ax.set_xlabel(df.columns[0])
-    ax.set_ylabel(df.columns[1])
-    ax.set_title("Inventory (Fallback: First vs Second Column)")
-    fig.tight_layout()
-    return fig_to_base64(fig)
-
-
-
-
-
-def plot_storecount_lines(df):
-    """
-    Multi-series line chart of StoreCount_30days/60days/90days by product,
-    or a reasonable fallback if those columns are missing.
-    """
-    # Detect store-count columns
-    sc30 = [c for c in df.columns if "StoreCount_30" in c or "StoreCount30" in c]
-    sc60 = [c for c in df.columns if "StoreCount_60" in c or "StoreCount60" in c]
-    sc90 = [c for c in df.columns if "StoreCount_90" in c or "StoreCount90" in c]
-
-    have_all = bool(sc30 and sc60 and sc90)
-
+    # Try common column names – adjust if your real names differ
     name_col = None
     for c in df.columns:
         if "Location / Product Name" in c or "Product Name" in c or "Product" in c:
             name_col = c
             break
+
     if name_col is None:
+        # Fallback: use first non-numeric column as categorical
         non_num = df.select_dtypes(exclude=["number"]).columns
         if len(non_num) == 0:
             return ""
         name_col = non_num[0]
 
+    inv_cases_cols = [c for c in df.columns if "On Floor Inventory" in c and "Case Equiv" not in c]
+    inv_equiv_cols = [c for c in df.columns if "On Floor Inventory" in c and "Case Equiv" in c]
+
     fig, ax = plt.subplots(figsize=(8, 4))
 
-    if have_all:
-        c30, c60, c90 = sc30[0], sc60[0], sc90[0]
-        plot_df = df[[name_col, c30, c60, c90]].dropna().iloc[:20]
+    if inv_cases_cols and inv_equiv_cols:
+        cases_col = inv_cases_cols[0]
+        equiv_col = inv_equiv_cols[0]
+
+        plot_df = df[[name_col, cases_col, equiv_col]].dropna()
+
+        # drop products where BOTH measures are zero (or missing treated as 0)
+        plot_df = plot_df[(plot_df[cases_col] != 0) | (plot_df[equiv_col] != 0)]
+
+        plot_df = plot_df.iloc[:20]  # avoid huge axis
+        if plot_df.empty:
+            plt.close(fig)
+            return ""
 
         x = range(len(plot_df))
-        ax.plot(x, plot_df[c30], marker="o", label="StoreCount 30 days")
-        ax.plot(x, plot_df[c60], marker="o", label="StoreCount 60 days")
-        ax.plot(x, plot_df[c90], marker="o", label="StoreCount 90 days")
+        width = 0.35
+
+        ax.bar([i - width / 2 for i in x], plot_df[cases_col], width=width, label="Cases")
+        ax.bar([i + width / 2 for i in x], plot_df[equiv_col], width=width, label="Case Equivs")
 
         ax.set_xticks(list(x))
         ax.set_xticklabels(plot_df[name_col], rotation=45, ha="right")
-        ax.set_ylabel("Store Count")
-        ax.set_title("Store Count by Product Over Time")
+        ax.set_ylabel("Inventory")
+        ax.set_title("On-Floor Inventory by Product (Cases vs Case Equivs)")
         ax.legend()
     else:
-        # Fallback: total store count (sum of any storecount-like cols) as bar chart
-        store_cols = [c for c in df.columns if "StoreCount" in c]
-        if not store_cols:
+        # Fallback: single bar plot for whichever numeric inventory col exists
+        inv_cols = inv_cases_cols or inv_equiv_cols or df.select_dtypes(include=["number"]).columns.tolist()
+        if not inv_cols:
             plt.close(fig)
             return ""
-        plot_df = df[[name_col] + store_cols].copy().iloc[:20]
-        plot_df["TotalStoreCount"] = plot_df[store_cols].sum(axis=1)
+        val_col = inv_cols[0]
+        plot_df = df[[name_col, val_col]].dropna()
 
-        sns.barplot(x=name_col, y="TotalStoreCount", data=plot_df, ax=ax)
+        # drop products where value is zero
+        plot_df = plot_df[plot_df[val_col] != 0]
+
+        plot_df = plot_df.iloc[:20]
+        if plot_df.empty:
+            plt.close(fig)
+            return ""
+
+        sns.barplot(x=name_col, y=val_col, data=plot_df, ax=ax)
         ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
-        ax.set_ylabel("Total Store Count")
-        ax.set_title("Total Store Count by Product")
+        ax.set_ylabel(val_col)
+        ax.set_title(f"{val_col} by Product")
 
     fig.tight_layout()
     return fig_to_base64(fig)
+
+def plot_storecount_lines(df):
+    """
+    Line chart: StoreCount over 30, 60, 90 days by product.
+    If any of the StoreCount columns are missing, falls back to total store count bar chart.
+    """
+    product_col = _detect_product_col(df)
+    if product_col is None:
+        return ""
+
+    sc30_cols, sc60_cols, sc90_cols = _detect_storecount_cols(df)
+    have_all = bool(sc30_cols and sc60_cols and sc90_cols)
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+
+    if have_all:
+        c30, c60, c90 = sc30_cols[0], sc60_cols[0], sc90_cols[0]
+        plot_df = df[[product_col, c30, c60, c90]].copy()
+        plot_df = plot_df.dropna(subset=[c30, c60, c90])
+        plot_df = plot_df.iloc[:20]
+
+        x = range(len(plot_df))
+        ax.plot(x, plot_df[c30], marker="o", label="30 days")
+        ax.plot(x, plot_df[c60], marker="o", label="60 days")
+        ax.plot(x, plot_df[c90], marker="o", label="90 days")
+
+        ax.set_xticks(list(x))
+        ax.set_xticklabels(plot_df[product_col], rotation=45, ha="right")
+        ax.set_xlabel("Product")
+        ax.set_ylabel("Projected Inventory / Store Count")
+        ax.set_title("Inventory Projection Over Time")
+        ax.legend()
+    else:
+        # Fallback: sum any storecount-like columns and do a bar chart
+        store_cols = [c for c in df.columns if "storecount" in c.lower()]
+        if not store_cols:
+            plt.close(fig)
+            return ""
+        plot_df = df[[product_col] + store_cols].copy().iloc[:20]
+        plot_df["TotalStoreCount"] = plot_df[store_cols].sum(axis=1)
+
+        sns.barplot(
+            data=plot_df,
+            x=product_col,
+            y="TotalStoreCount",
+            ax=ax,
+            color="orange"
+        )
+        ax.set_xlabel("Product")
+        ax.set_ylabel("Total Store Count")
+        ax.set_title("Total Store Count by Product")
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
+
+    fig.tight_layout()
+    return fig_to_base64(fig)
+
+# ---------- EXISTING INSIGHTS / ROUTES ----------
 
 def generate_local_insights(df):
     try:
@@ -206,7 +294,6 @@ def upload():
     except Exception as e:
         return jsonify({"error": f"YData Profiling failed: {e}"}), 500
 
-    # New visualizations
     visualizations = {}
     inv_img = plot_inventory_bar(df)
     if inv_img:
@@ -243,16 +330,15 @@ def build_dashboard_html(upload_id):
     preview_html = df.head(20).to_html(classes="table table-striped", border=0)
     insights = generate_local_insights(df)
 
-    # New plots for the dashboard
     inv_b64 = plot_inventory_bar(df)
     store_b64 = plot_storecount_lines(df)
 
     inv_img = ""
     store_img = ""
     if inv_b64:
-        inv_img = f'<img src="data:image/png;base64,{inv_b64}" class="plot-img" alt="Inventory by Product"/>'
+        inv_img = f'<img src="data:image/png;base64,{inv_b64}" class="plot-img" alt="Inventory by Product and Location"/>'
     if store_b64:
-        store_img = f'<img src="data:image/png;base64,{store_b64}" class="plot-img" alt="Store Count Trends"/>'
+        store_img = f'<img src="data:image/png;base64,{store_b64}" class="plot-img" alt="Inventory Projection Over Time"/>'
 
     dashboard_html = f"""
     <div class="section">
@@ -312,7 +398,7 @@ def pdf_report(upload_id):
     </body>
     </html>
     """
-    wkhtml_path = '/usr/local/bin/wkhtmltopdf'  # Change as needed
+    wkhtml_path = '/usr/bin/wkhtmltopdf'  # Change as needed
     config = pdfkit.configuration(wkhtmltopdf=wkhtml_path)
     temp_pdf_path = "/tmp/raw_report.pdf"
     pdfkit.from_string(full_html, temp_pdf_path, configuration=config, options={'enable-local-file-access': None})
