@@ -9,14 +9,12 @@ import pdfkit
 from PyPDF2 import PdfReader, PdfWriter
 import re
 import logging
-
 import matplotlib.pyplot as plt
 import seaborn as sns
-
 from ydata_profiling import ProfileReport
 from werkzeug.utils import secure_filename
-
 import shutil
+
 print(shutil.which("wkhtmltopdf"))
 
 app = Flask(__name__)
@@ -33,193 +31,123 @@ def allowed_file(filename):
 
 def fig_to_base64(fig):
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight")
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
     plt.close(fig)
     buf.seek(0)
     return base64.b64encode(buf.read()).decode("utf-8")
 
-# ---------- NEW VISUALIZATIONS ----------
-
-def _detect_product_col(df):
-    # Try to find a reasonable product/name column
-    for c in df.columns:
-        lname = c.lower()
-        if "product" in lname or "sku" in lname or "item" in lname:
-            return c
-        if "location / product name" in lname:
-            return c
-    non_num = df.select_dtypes(exclude=["number"]).columns
-    if len(non_num) > 0:
-        return non_num[0]
-    return None
-
-def _detect_location_col(df):
-    for c in df.columns:
-        lname = c.lower()
-        if "location" in lname and "product" not in lname:
-            return c
-    return None
-
-def _detect_inventory_cases_col(df):
-    # Prefer a column explicitly marked as cases
-    for c in df.columns:
-        lname = c.lower()
-        if "on floor inventory" in lname and "case" in lname and "equiv" not in lname and "equiv" not in lname:
-            return c
-    # Fallback: any inventory-like numeric column
-    for c in df.columns:
-        lname = c.lower()
-        if "inventory" in lname:
-            if pd.api.types.is_numeric_dtype(df[c]):
-                return c
-    num_cols = df.select_dtypes(include=["number"]).columns
-    return num_cols[0] if len(num_cols) else None
-
-def _detect_storecount_cols(df):
-    cols_30 = []
-    cols_60 = []
-    cols_90 = []
-    for c in df.columns:
-        lname = c.lower()
-        if "storecount_30" in lname or "storecount30" in lname or "30days" in lname:
-            cols_30.append(c)
-        if "storecount_60" in lname or "storecount60" in lname or "60days" in lname:
-            cols_60.append(c)
-        if "storecount_90" in lname or "storecount90" in lname or "90days" in lname:
-            cols_90.append(c)
-    return cols_30, cols_60, cols_90
-
 def plot_inventory_bar(df):
     """
-    Clustered bar chart of On-Floor Inventory (Cases vs Case Equivs) by product.
-    Falls back to a simple bar if only one of the two columns exists.
-    Products with 0 inventory are excluded.
+    If 'Location' contains 'Southern Crown Partners: Charleston, SC',
+    plot only that subset, with Product Name on x-axis,
+    On Floor Inventory (Cases) on y-axis, skipping the first two rows.
+    Otherwise, just plot the second column vs. the third column, skipping two rows.
     """
-    # Try common column names – adjust if your real names differ
-    name_col = None
-    for c in df.columns:
-        if "Location / Product Name" in c or "Product Name" in c or "Product" in c:
-            name_col = c
-            break
-
-    if name_col is None:
-        # Fallback: use first non-numeric column as categorical
-        non_num = df.select_dtypes(exclude=["number"]).columns
-        if len(non_num) == 0:
-            return ""
-        name_col = non_num[0]
-
-    inv_cases_cols = [c for c in df.columns if "On Floor Inventory" in c and "Case Equiv" not in c]
-    inv_equiv_cols = [c for c in df.columns if "On Floor Inventory" in c and "Case Equiv" in c]
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-
-    if inv_cases_cols and inv_equiv_cols:
-        cases_col = inv_cases_cols[0]
-        equiv_col = inv_equiv_cols[0]
-
-        plot_df = df[[name_col, cases_col, equiv_col]].dropna()
-
-        # drop products where BOTH measures are zero (or missing treated as 0)
-        plot_df = plot_df[(plot_df[cases_col] != 0) | (plot_df[equiv_col] != 0)]
-
-        plot_df = plot_df.iloc[:20]  # avoid huge axis
-        if plot_df.empty:
-            plt.close(fig)
-            return ""
-
-        x = range(len(plot_df))
-        width = 0.35
-
-        ax.bar([i - width / 2 for i in x], plot_df[cases_col], width=width, label="Cases")
-        ax.bar([i + width / 2 for i in x], plot_df[equiv_col], width=width, label="Case Equivs")
-
-        ax.set_xticks(list(x))
-        ax.set_xticklabels(plot_df[name_col], rotation=45, ha="right")
-        ax.set_ylabel("Inventory")
-        ax.set_title("On-Floor Inventory by Product (Cases vs Case Equivs)")
-        ax.legend()
-    else:
-        # Fallback: single bar plot for whichever numeric inventory col exists
-        inv_cols = inv_cases_cols or inv_equiv_cols or df.select_dtypes(include=["number"]).columns.tolist()
-        if not inv_cols:
-            plt.close(fig)
-            return ""
-        val_col = inv_cols[0]
-        plot_df = df[[name_col, val_col]].dropna()
-
-        # drop products where value is zero
-        plot_df = plot_df[plot_df[val_col] != 0]
-
-        plot_df = plot_df.iloc[:20]
-        if plot_df.empty:
-            plt.close(fig)
-            return ""
-
-        sns.barplot(x=name_col, y=val_col, data=plot_df, ax=ax)
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
-        ax.set_ylabel(val_col)
-        ax.set_title(f"{val_col} by Product")
-
+    if "Location" in df.columns and (df["Location"] == "Southern Crown Partners: Charleston, SC").any():
+        sub = df[df["Location"] == "Southern Crown Partners: Charleston, SC"].iloc[2:].copy()
+        if "Product Name" in sub.columns and "On Floor Inventory (Cases)" in sub.columns:
+            x = sub["Product Name"]
+            y = sub["On Floor Inventory (Cases)"].fillna(0)
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.bar(x, y, width=0.9, edgecolor="white", linewidth=0.7)
+            plt.xticks(rotation=90)
+            ax.set_xlabel("Product Name")
+            ax.set_ylabel("# of Cases")
+            ax.set_title("Charleston Inventory")
+            fig.tight_layout()
+            return fig_to_base64(fig)
+    
+    # Fallback: plot second and third columns (skipping first two rows)
+    plot_df = df.iloc[2:].copy()
+    if plot_df.shape[1] < 3:  # need at least 3 cols to use 1 and 2
+        return ""
+    
+    # use column 1 for x and column 2 for y
+    x = plot_df.iloc[:, 1].astype(str)
+    y = pd.to_numeric(plot_df.iloc[:, 2], errors="coerce").fillna(0)
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.bar(x, y, width=0.9, edgecolor="white", linewidth=0.7)
+    plt.xticks(rotation=90)
+    ax.set_xlabel(df.columns[1])  # column index 1
+    ax.set_ylabel(df.columns[2])  # column index 2
+    ax.set_title("Inventory (Fallback: Second vs Third Column)")
     fig.tight_layout()
     return fig_to_base64(fig)
 
 def plot_storecount_lines(df):
     """
-    Line chart: StoreCount over 30, 60, 90 days by product.
-    If any of the StoreCount columns are missing, falls back to total store count bar chart.
+    If a StoreCount_30days column exists, create an overlaid bar chart
+    of StoreCount_30days / _60days / _90days by Product Name (or equivalent).
+    Otherwise, fall back to a pie chart of column index 2 values,
+    with column index 1 as labels.
     """
-    product_col = _detect_product_col(df)
-    if product_col is None:
-        return ""
-
-    sc30_cols, sc60_cols, sc90_cols = _detect_storecount_cols(df)
-    have_all = bool(sc30_cols and sc60_cols and sc90_cols)
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-
-    if have_all:
-        c30, c60, c90 = sc30_cols[0], sc60_cols[0], sc90_cols[0]
-        plot_df = df[[product_col, c30, c60, c90]].copy()
-        plot_df = plot_df.dropna(subset=[c30, c60, c90])
-        plot_df = plot_df.iloc[:20]
-
-        x = range(len(plot_df))
-        ax.plot(x, plot_df[c30], marker="o", label="30 days")
-        ax.plot(x, plot_df[c60], marker="o", label="60 days")
-        ax.plot(x, plot_df[c90], marker="o", label="90 days")
-
+    # Check for StoreCount_30days (or close variants)
+    store_30_cols = [c for c in df.columns if "StoreCount_30" in c or "StoreCount30" in c or "StoreCount_30days" in c]
+    
+    if store_30_cols:
+        # Overlaid 30/60/90-day bar chart
+        # Identify the last 3 columns as 30/60/90 as in your notebook pattern
+        last_cols = df.columns[-3:]
+        col_30, col_60, col_90 = last_cols
+        
+        plot_df = df.iloc[2:, :].copy()  # skip first 2 rows, consistent with notebook
+        plot_df[last_cols] = plot_df[last_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+        plot_df = plot_df[(plot_df[last_cols] != 0).any(axis=1)]
+        
+        # Use Product Name (or fallback) as x labels
+        if "Product Name" in plot_df.columns:
+            label_col = "Product Name"
+        else:
+            # fall back to first non-numeric column
+            non_num = plot_df.select_dtypes(exclude=["number"]).columns
+            if len(non_num) == 0:
+                return ""
+            label_col = non_num[0]
+        
+        # optional: limit to fewer products for readability
+        plot_df = plot_df.sort_values(col_90, ascending=False).head(12)
+        
+        x_labels = plot_df[label_col].astype(str)
+        x = range(len(x_labels))
+        
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # All start at 0, different colors, no transparency
+        ax.bar(x, plot_df[col_90], width=0.7, color="tab:green", label="90 days")
+        ax.bar(x, plot_df[col_60], width=0.5, color="tab:orange", label="60 days")
+        ax.bar(x, plot_df[col_30], width=0.3, color="tab:blue", label="30 days")
+        
         ax.set_xticks(list(x))
-        ax.set_xticklabels(plot_df[product_col], rotation=45, ha="right")
-        ax.set_xlabel("Product")
-        ax.set_ylabel("Projected Inventory / Store Count")
-        ax.set_title("Inventory Projection Over Time")
+        ax.set_xticklabels(x_labels, rotation=90)
+        ax.set_ylabel("Store Count")
+        ax.set_xlabel(label_col)
+        ax.set_title("Store Count by Product 30/60/90 Days")
         ax.legend()
-    else:
-        # Fallback: sum any storecount-like columns and do a bar chart
-        store_cols = [c for c in df.columns if "storecount" in c.lower()]
-        if not store_cols:
-            plt.close(fig)
-            return ""
-        plot_df = df[[product_col] + store_cols].copy().iloc[:20]
-        plot_df["TotalStoreCount"] = plot_df[store_cols].sum(axis=1)
-
-        sns.barplot(
-            data=plot_df,
-            x=product_col,
-            y="TotalStoreCount",
-            ax=ax,
-            color="orange"
-        )
-        ax.set_xlabel("Product")
-        ax.set_ylabel("Total Store Count")
-        ax.set_title("Total Store Count by Product")
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
-
+        fig.tight_layout()
+        return fig_to_base64(fig)
+    
+    # ---------- Fallback: pie chart on columns 1 and 2 ----------
+    plot_df = df.iloc[2:, :15].copy()
+    if plot_df.shape[1] < 3:
+        return ""
+    
+    labels = plot_df.iloc[:, 1].astype(str)
+    sizes = pd.to_numeric(plot_df.iloc[:, 2], errors="coerce").fillna(0)
+    
+    # remove zero-size slices
+    mask = sizes != 0
+    labels = labels[mask]
+    sizes = sizes[mask]
+    
+    if sizes.sum() == 0:
+        return ""
+    
+    fig, ax = plt.subplots(figsize=(10, 10))
+    ax.pie(sizes, labels=labels, autopct="%1.1f%%", startangle=90)
+    ax.set_title(f"Pie Chart: {df.columns[2]} by {df.columns[1]}")
     fig.tight_layout()
     return fig_to_base64(fig)
-
-# ---------- EXISTING INSIGHTS / ROUTES ----------
 
 def generate_local_insights(df):
     try:
@@ -227,11 +155,13 @@ def generate_local_insights(df):
         missing_total = df.isnull().sum().sum()
         num_numeric = len(df.select_dtypes(include=["number"]).columns)
         num_categorical = len(df.select_dtypes(include=["object", "category"]).columns)
+        
         paragraph = (
             f"The dataset contains {rows} rows and {cols} columns. "
             f"There are {num_numeric} numeric columns and {num_categorical} categorical columns. "
             f"It has {missing_total} missing values in total.\n"
         )
+        
         numeric_cols = df.select_dtypes(include=["number"]).columns[:3]
         for col in numeric_cols:
             min_val = df[col].min()
@@ -240,12 +170,14 @@ def generate_local_insights(df):
             paragraph += (
                 f"Numeric column '{col}': min = {min_val:.2f}, max = {max_val:.2f}, mean = {mean_val:.2f}. "
             )
+        
         missing_per_column = df.isnull().sum().sort_values(ascending=False)
         most_missing = missing_per_column[missing_per_column > 0]
         if not most_missing.empty:
             paragraph += "\nColumns with most missing data:\n"
             for col, cnt in most_missing.head(2).items():
                 paragraph += f"'{col}' has {cnt} missing values. "
+        
         if num_numeric >= 2:
             corr_matrix = df.select_dtypes(include=["number"]).corr().abs()
             high_corr = []
@@ -257,6 +189,7 @@ def generate_local_insights(df):
                 paragraph += "\nHighly correlated numeric columns (>0.8):\n"
                 for c1, c2, val in high_corr:
                     paragraph += f"'{c1}' and '{c2}' with correlation of {val:.2f}. "
+        
         return paragraph.strip()
     except Exception as e:
         return f"Failed to generate local insights: {e}"
@@ -269,16 +202,20 @@ def index():
 def upload():
     if "file" not in request.files:
         return jsonify({"error": "No file part in request"}), 400
+    
     file = request.files["file"]
     if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
+    
     if not allowed_file(file.filename):
         return jsonify({"error": "File type not allowed"}), 400
+    
     original_filename = secure_filename(file.filename)
     unique_id = uuid.uuid4().hex
     unique_filename = f"{unique_id}_{original_filename}"
     filepath = os.path.join(UPLOAD_FOLDER, unique_filename)
     file.save(filepath)
+    
     try:
         if original_filename.endswith(".csv"):
             df = pd.read_csv(filepath)
@@ -286,22 +223,26 @@ def upload():
             df = pd.read_excel(filepath)
     except Exception as e:
         return jsonify({"error": f"Could not read file: {e}"}), 500
+    
     local_insights = generate_local_insights(df)
+    
     try:
         profile = ProfileReport(df, title="Automated Profiling Report")
         report_filename = f"{unique_id}_profiling_report.html"
         profile.to_file(os.path.join(REPORT_FOLDER, report_filename))
     except Exception as e:
         return jsonify({"error": f"YData Profiling failed: {e}"}), 500
-
+    
+    # New visualizations
     visualizations = {}
     inv_img = plot_inventory_bar(df)
     if inv_img:
         visualizations["inventory_bar"] = inv_img
+    
     store_img = plot_storecount_lines(df)
     if store_img:
         visualizations["storecount_trend"] = store_img
-
+    
     return jsonify({
         "message": "Success",
         "report_url": f"/reports/{report_filename}",
@@ -319,6 +260,7 @@ def build_dashboard_html(upload_id):
     matching_files = [f for f in upload_files if f.startswith(upload_id)]
     if not matching_files:
         return "<p>Uploaded file not found for full report.</p>"
+    
     filepath = os.path.join(UPLOAD_FOLDER, matching_files[0])
     try:
         if filepath.endswith(".csv"):
@@ -327,44 +269,32 @@ def build_dashboard_html(upload_id):
             df = pd.read_excel(filepath)
     except Exception as e:
         return f"<p>Error loading dataset: {e}</p>"
+    
     preview_html = df.head(20).to_html(classes="table table-striped", border=0)
     insights = generate_local_insights(df)
-
+    
     inv_b64 = plot_inventory_bar(df)
     store_b64 = plot_storecount_lines(df)
-
+    
     inv_img = ""
     store_img = ""
     if inv_b64:
-        inv_img = f'<img src="data:image/png;base64,{inv_b64}" class="plot-img" alt="Inventory by Product and Location"/>'
+        inv_img = f'<img src="data:image/png;base64,{inv_b64}" style="max-width:100%; height:auto; margin:20px 0;" alt="Inventory by Product"/>'
     if store_b64:
-        store_img = f'<img src="data:image/png;base64,{store_b64}" class="plot-img" alt="Inventory Projection Over Time"/>'
-
+        store_img = f'<img src="data:image/png;base64,{store_b64}" style="max-width:100%; height:auto; margin:20px 0;" alt="Store Count Trends"/>'
+    
     dashboard_html = f"""
-    <div class="section">
-      <h2>Data Preview (First 20 Rows)</h2>
-      {preview_html}
-    </div>
-    <div class="section">
-      <h2>Summary Stats & Insights</h2>
-      <p>{insights}</p>
-    </div>
-    <div class="section">
-      <h2>Visualizations</h2>
-      {inv_img}
-      {store_img}
-    </div>
+    <h2>Data Preview (First 20 Rows)</h2>
+    {preview_html}
+    
+    <h2>Summary Stats & Insights</h2>
+    <p>{insights}</p>
+    
+    <h2>Visualizations</h2>
+    {inv_img}
+    {store_img}
     """
     return dashboard_html
-
-def expand_all_variable_sections(html):
-    # Remove 'display:none', 'collapse', aria-expanded, or similar hiding for variable panels
-    html = re.sub(r'style="display:\s*none;"', 'style="display:block;"', html)
-    html = re.sub(r'(class="[^"]*)collapse([^"]*")', r'\1\2', html)  # removes 'collapse' class
-    html = re.sub(r'data-bs-toggle="collapse"', '', html)
-    html = re.sub(r'aria-expanded="false"', 'aria-expanded="true"', html)
-    # Optionally, expand other known hiding mechanisms if your HTML uses others
-    return html
 
 @app.route("/pdf_report/<upload_id>")
 def pdf_report(upload_id):
@@ -372,55 +302,42 @@ def pdf_report(upload_id):
     report_path = os.path.join(REPORT_FOLDER, report_filename)
     if not os.path.exists(report_path):
         return "Report not found", 404
+    
+    # Read the ydata HTML file as-is
     with open(report_path, "r", encoding="utf-8") as f:
-        backend_html = f.read()
-    backend_html = expand_all_variable_sections(backend_html)
+        ydata_html = f.read()
+    
+    # Build dashboard
     dashboard_html = build_dashboard_html(upload_id)
+    
+    # Simply prepend dashboard to ydata HTML
     full_html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8"/>
-      <title>Full Data Report</title>
-      <style>
-        body {{ font-family: Arial, sans-serif; margin: 20px; color: #111; }}
-        h1 {{ color: royalblue; text-align: center; margin-bottom: 40px; }}
-        .section {{ margin-bottom: 40px; }}
-        .table {{ width: 100%; border-collapse: collapse; }}
-        .table-striped tbody tr:nth-child(odd) {{ background-color: #f2f2f2; }}
-        .plot-img {{ max-width: 80%; margin-bottom: 20px; border: 1px solid #ccc; display: block; margin-left: auto; margin-right: auto; }}
-      </style>
-    </head>
-    <body>
-      <h1>Bogmayer Analytics Dashboard - Full Report</h1>
-      {dashboard_html}
-      <div class="section"><h2>Automated Profiling Report</h2>{backend_html}</div>
-    </body>
-    </html>
+    <div style="font-family: Arial, sans-serif; margin: 20px;">
+        <h1 style="color: royalblue; text-align: center;">Bogmayer Analytics Dashboard - Full Report</h1>
+        {dashboard_html}
+        <hr style="margin: 40px 0;"/>
+        <h2>Automated Profiling Report</h2>
+    </div>
+    {ydata_html}
     """
-    wkhtml_path = '/usr/bin/wkhtmltopdf'  # Change as needed
+    
+    # Find wkhtmltopdf
+    wkhtml_path = shutil.which("wkhtmltopdf") or '/usr/local/bin/wkhtmltopdf' or '/usr/bin/wkhtmltopdf'
     config = pdfkit.configuration(wkhtmltopdf=wkhtml_path)
-    temp_pdf_path = "/tmp/raw_report.pdf"
-    pdfkit.from_string(full_html, temp_pdf_path, configuration=config, options={'enable-local-file-access': None})
-
-    # Remove blank pages and cap at 8 (always keep last page)
-    reader = PdfReader(temp_pdf_path)
-    writer = PdfWriter()
-    kept_count = 0
-    max_pages = 8
-    for idx, page in enumerate(reader.pages):
-        text = page.extract_text()
-        if (text and text.strip()) or idx == len(reader.pages) - 1:  # keep if not blank or last page
-            writer.add_page(page)
-            kept_count += 1
-        if kept_count >= max_pages:
-            break
-    outstream = io.BytesIO()
-    writer.write(outstream)
-    outstream.seek(0)
-    response = make_response(outstream.read())
+    
+    # Simple options
+    options = {
+        'enable-local-file-access': None,
+        'encoding': 'UTF-8',
+    }
+    
+    # Convert to PDF
+    pdf_bytes = pdfkit.from_string(full_html, False, configuration=config, options=options)
+    
+    response = make_response(pdf_bytes)
     response.headers["Content-Type"] = "application/pdf"
     response.headers["Content-Disposition"] = f"attachment; filename={upload_id}_full_report.pdf"
+    
     return response
 
 if __name__ == "__main__":
