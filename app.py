@@ -228,7 +228,24 @@ def upload():
     local_insights = generate_local_insights(df)
     
     try:
-        profile = ProfileReport(df, title="Automated Profiling Report")
+        # Use minimal mode for MUCH faster report generation (30-60s instead of 3+ minutes)
+        profile = ProfileReport(
+            df, 
+            title="Automated Profiling Report",
+            minimal=True,
+            explorative=False,
+            # Disable expensive computations that take the most time
+            correlations={
+                "auto": {"calculate": False},
+                "pearson": {"calculate": False},
+                "spearman": {"calculate": False},
+                "kendall": {"calculate": False},
+                "phi_k": {"calculate": False},
+                "cramers": {"calculate": False},
+            },
+            interactions={"continuous": False},
+            missing_diagrams={"bar": False, "matrix": False, "heatmap": False},
+        )
         report_filename = f"{unique_id}_profiling_report.html"
         profile.to_file(os.path.join(REPORT_FOLDER, report_filename))
     except Exception as e:
