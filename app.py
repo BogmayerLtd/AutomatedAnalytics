@@ -43,8 +43,8 @@ def plot_inventory_bar(df):
     On Floor Inventory (Cases) on y-axis, skipping the first two rows.
     Otherwise, just plot the second column vs. the third column, skipping two rows.
     """
-    if "Distributor Location" in df.columns and (df["Distributor Location"] == "Southern Crown Partners: Charleston, SC").any():
-        sub = df[df["Distributor Location"] == "Southern Crown Partners: Charleston, SC"].iloc[2:].copy()
+    if "Location" in df.columns and (df["Location"] == "Southern Crown Partners: Charleston, SC").any():
+        sub = df[df["Location"] == "Southern Crown Partners: Charleston, SC"].iloc[2:].copy()
         #Southern Crown Partners: Charleston, SC
         if "Product Name" in sub.columns and "On Floor Inventory (Cases)" in sub.columns:
             x = sub["Product Name"]
@@ -288,8 +288,54 @@ def build_dashboard_html(upload_id):
     except Exception as e:
         return f"<p>Error loading dataset: {e}</p>"
     
-    preview_html = df.head(20).to_html(classes="table table-striped", border=0)
+    # Show only 12 rows in preview
+    preview_html = df.head(12).to_html(classes="table table-striped", border=0)
     insights = generate_local_insights(df)
+    
+    # Generate Basic Data Analysis table (same as frontend)
+    columns = df.columns.tolist()
+    analysis_html = f'<p><b>Rows:</b> {len(df)}, <b>Columns:</b> {len(columns)}</p>'
+    analysis_html += '''<table class="table table-bordered" style="width:100%; border-collapse: collapse;">
+    <thead><tr style="background-color: #f2f2f2;">
+        <th style="border: 1px solid #ddd; padding: 8px;">Column</th>
+        <th style="border: 1px solid #ddd; padding: 8px;">Type</th>
+        <th style="border: 1px solid #ddd; padding: 8px;">Missing</th>
+        <th style="border: 1px solid #ddd; padding: 8px;">Example</th>
+        <th style="border: 1px solid #ddd; padding: 8px;">Stats</th>
+    </tr></thead><tbody>'''
+    
+    for col in columns:
+        values = df[col].dropna()
+        missing = len(df) - len(values)
+        col_type = "string"
+        stats = "-"
+        example = str(values.iloc[0]) if len(values) > 0 else ""
+        
+        # Check if numeric
+        if pd.api.types.is_numeric_dtype(df[col]):
+            col_type = "number"
+            if len(values) > 0:
+                min_val = values.min()
+                max_val = values.max()
+                mean_val = values.mean()
+                stats = f"min: {min_val:.2f}, max: {max_val:.2f}, mean: {mean_val:.2f}"
+        # Check if date
+        elif df[col].dtype == 'object':
+            try:
+                pd.to_datetime(values.head(10), errors='raise')
+                col_type = "date"
+            except:
+                pass
+        
+        analysis_html += f'''<tr>
+            <td style="border: 1px solid #ddd; padding: 8px;">{col}</td>
+            <td style="border: 1px solid #ddd; padding: 8px;">{col_type}</td>
+            <td style="border: 1px solid #ddd; padding: 8px;">{missing}</td>
+            <td style="border: 1px solid #ddd; padding: 8px;">{example}</td>
+            <td style="border: 1px solid #ddd; padding: 8px;">{stats}</td>
+        </tr>'''
+    
+    analysis_html += '</tbody></table>'
     
     inv_b64 = plot_inventory_bar(df)
     store_b64 = plot_storecount_lines(df)
@@ -302,8 +348,11 @@ def build_dashboard_html(upload_id):
         store_img = f'<img src="data:image/png;base64,{store_b64}" style="max-width:100%; height:auto; margin:20px 0;" alt="Store Count Trends"/>'
     
     dashboard_html = f"""
-    <h2>Data Preview (First 20 Rows)</h2>
+    <h2>Data Preview (First 12 Rows)</h2>
     {preview_html}
+    
+    <h2>Basic Data Analysis</h2>
+    {analysis_html}
     
     <h2>Summary Stats & Insights</h2>
     <p>{insights}</p>
@@ -359,4 +408,3 @@ def pdf_report(upload_id):
     return response
 
 if __name__ == "__main__":
-    app.run(debug=True)
