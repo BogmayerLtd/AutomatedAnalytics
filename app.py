@@ -48,6 +48,7 @@ def plot_inventory_bar(df):
     
     if "Location" in df.columns and (df["Location"] == "Southern Crown Partners: Charleston, SC").any():
         sub = df[df["Location"] == "Southern Crown Partners: Charleston, SC"].copy()
+        sub = sub.iloc[2:]
         if "Product Name" in sub.columns and "On Floor Inventory (Cases)" in sub.columns:
             x = sub["Product Name"]
             y = sub["On Floor Inventory (Cases)"].fillna(0)
