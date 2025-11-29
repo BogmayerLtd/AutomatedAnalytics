@@ -43,9 +43,11 @@ def plot_inventory_bar(df):
     On Floor Inventory (Cases) on y-axis, skipping the first two rows.
     Otherwise, just plot the second column vs. the third column, skipping two rows.
     """
-    if "Location" in df.columns and (df["Location"] == "Southern Crown Partners: Charleston, SC").any():
-        sub = df[df["Location"] == "Southern Crown Partners: Charleston, SC"].iloc[2:].copy()
-        #Southern Crown Partners: Charleston, SC
+    # Skip first 2 rows for all processing
+    df = df.iloc[2:].copy()
+    
+    if "Distributor Location" in df.columns and (df["Distributor Location"] == "Southern Crown Partners: Charleston, SC").any():
+        sub = df[df["Distributor Location"] == "Southern Crown Partners: Charleston, SC"].copy()
         if "Product Name" in sub.columns and "On Floor Inventory (Cases)" in sub.columns:
             x = sub["Product Name"]
             y = sub["On Floor Inventory (Cases)"].fillna(0)
@@ -58,14 +60,13 @@ def plot_inventory_bar(df):
             fig.tight_layout()
             return fig_to_base64(fig)
     
-    # Fallback: plot second and third columns (skipping first two rows)
-    plot_df = df.iloc[2:].copy()
-    if plot_df.shape[1] < 3:  # need at least 3 cols to use 1 and 2
+    # Fallback: plot second and third columns (already skipped first two rows)
+    if df.shape[1] < 3:
         return ""
     
     # use column 1 for x and column 2 for y
-    x = plot_df.iloc[:, 1].astype(str)
-    y = pd.to_numeric(plot_df.iloc[:, 2], errors="coerce").fillna(0)
+    x = df.iloc[:, 1].astype(str)
+    y = pd.to_numeric(df.iloc[:, 2], errors="coerce").fillna(0)
     
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.bar(x, y, width=0.9, edgecolor="white", linewidth=0.7)
@@ -350,6 +351,8 @@ def build_dashboard_html(upload_id):
     dashboard_html = f"""
     <h2>Data Preview (First 12 Rows)</h2>
     {preview_html}
+    
+    <div style="page-break-after: always;"></div>
     
     <h2>Basic Data Analysis</h2>
     {analysis_html}
