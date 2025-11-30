@@ -367,8 +367,10 @@ def build_dashboard_html(upload_id):
     <h2>Visualizations</h2>
     {inv_img}
     {store_img}
-    """
+
     <div style="margin-bottom: 120px;"></div>
+    """
+    
     
     return dashboard_html
 
