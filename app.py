@@ -357,17 +357,19 @@ def build_dashboard_html(upload_id):
     <h2>Basic Data Analysis</h2>
     {analysis_html}
     
-    <div style="margin-bottom: 40px;"></div>
+    <div style="margin-bottom: 120px;"></div>
     
     <h2>Summary Stats & Insights</h2>
     <p>{insights}</p>
     
-    <div style="margin-bottom: 40px;"></div>
+    <div style="margin-bottom: 120px;"></div>
     
     <h2>Visualizations</h2>
     {inv_img}
     {store_img}
     """
+    <div style="margin-bottom: 120px;"></div>
+    
     return dashboard_html
 
 @app.route("/pdf_report/<upload_id>")
