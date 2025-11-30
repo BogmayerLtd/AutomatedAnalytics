@@ -46,9 +46,8 @@ def plot_inventory_bar(df):
     # Skip first 2 rows for all processing
     df = df.iloc[2:].copy()
     
-    if "Location" in df.columns and (df["Location"] == "Southern Crown Partners: Charleston, SC").any():
-        sub = df[df["Location"] == "Southern Crown Partners: Charleston, SC"].copy()
-        sub = sub.iloc[2:]
+    if "Distributor Location" in df.columns and (df["Distributor Location"] == "Southern Crown Partners: Charleston, SC").any():
+        sub = df[df["Distributor Location"] == "Southern Crown Partners: Charleston, SC"].copy()
         if "Product Name" in sub.columns and "On Floor Inventory (Cases)" in sub.columns:
             x = sub["Product Name"]
             y = sub["On Floor Inventory (Cases)"].fillna(0)
@@ -358,8 +357,12 @@ def build_dashboard_html(upload_id):
     <h2>Basic Data Analysis</h2>
     {analysis_html}
     
+    <div style="margin-bottom: 40px;"></div>
+    
     <h2>Summary Stats & Insights</h2>
     <p>{insights}</p>
+    
+    <div style="margin-bottom: 40px;"></div>
     
     <h2>Visualizations</h2>
     {inv_img}
