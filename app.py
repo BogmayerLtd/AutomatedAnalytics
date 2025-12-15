@@ -44,7 +44,20 @@ def plot_inventory_bar(df):
     On Floor Inventory (Cases) on y-axis, skipping the first two rows.
     Otherwise, just plot the second column vs. the third column, skipping two rows.
     Put a ceiling at 1000 on inventory (drop bars > 1000).
+    Enforce a fixed order for product names.
     """
+    desired_order = [
+        "Island Coastal Lager 2/12 pack 12oz Cans",
+        "Island Coastal Lager 4/6 pack 12oz Cans",
+        "Island Coastal Lager 1/6 Barrel Keg",
+        "Island Coastal Lager 1/2 Barrel Keg",
+        "Island Active 2/12 pack 12oz Cans",
+        "Island Active 1/6 Keg",
+        "Island Chill Lemon Lime 6/4 pack 12oz Cans",
+        "Island Chill Strawberry Mango 6/4 pack 12oz Cans",
+        "Island Chill Pineapple Coconut 6/4 pack 12oz Cans",
+    ]
+
     # Skip first 2 rows for all processing
     df = df.iloc[2:].copy()
     
@@ -54,10 +67,16 @@ def plot_inventory_bar(df):
             # filter to only rows <= 1000
             sub = sub[sub["On Floor Inventory (Cases)"] <= 1000]
             if sub.empty:
-                return ""  # nothing to plot after filtering
+                return ""
 
-            x = sub["Product Name"]
+            # enforce desired product order; keep only products in the list
+            sub = sub.set_index("Product Name").reindex(desired_order).dropna(subset=["On Floor Inventory (Cases)"])
+            if sub.empty:
+                return ""
+
+            x = sub.index
             y = sub["On Floor Inventory (Cases)"].fillna(0)
+
             fig, ax = plt.subplots(figsize=(10, 6))
             ax.bar(x, y, width=0.9, edgecolor="white", linewidth=0.7)
             plt.xticks(rotation=90)
@@ -80,16 +99,27 @@ def plot_inventory_bar(df):
     x = x[mask]
     y = y[mask]
     if y.empty:
-        return ""  # nothing to plot after filtering
-    
+        return ""
+
+    # enforce desired product order for fallback as well
+    # build a small dataframe then reindex on the product name
+    tmp = pd.DataFrame({"Product Name": x.values, "Value": y.values})
+    tmp = tmp.set_index("Product Name").reindex(desired_order).dropna(subset=["Value"])
+    if tmp.empty:
+        return ""
+
+    x_ordered = tmp.index
+    y_ordered = tmp["Value"]
+
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(x, y, width=0.9, edgecolor="white", linewidth=0.7)
+    ax.bar(x_ordered, y_ordered, width=0.9, edgecolor="white", linewidth=0.7)
     plt.xticks(rotation=90)
     ax.set_xlabel(df.columns[1])  # column index 1
     ax.set_ylabel(df.columns[2])  # column index 2
-    ax.set_title("Inventory Plot (≤ 1000)")
+    ax.set_title("Charleston Inventory Plot")
     fig.tight_layout()
     return fig_to_base64(fig)
+
 
 
 def plot_storecount_lines(df):
