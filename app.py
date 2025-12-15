@@ -43,12 +43,15 @@ def plot_inventory_bar(df):
     On Floor Inventory (Cases) on y-axis, skipping the first two rows.
     Otherwise, just plot the second column vs. the third column, skipping two rows.
     """
-    # Skip first 2 rows for all processing
     df = df.iloc[2:].copy()
     
     if "Distributor Location" in df.columns and (df["Distributor Location"] == "Southern Crown Partners: Charleston, SC").any():
         sub = df[df["Distributor Location"] == "Southern Crown Partners: Charleston, SC"].copy()
         if "Product Name" in sub.columns and "On Floor Inventory (Cases)" in sub.columns:
+            sub = sub[pd.to_numeric(sub["On Floor Inventory (Cases)"], errors='coerce') <= 1000]
+            if sub.empty:
+                return ""
+                
             x = sub["Product Name"]
             y = sub["On Floor Inventory (Cases)"].fillna(0)
             fig, ax = plt.subplots(figsize=(10, 6))
@@ -60,7 +63,7 @@ def plot_inventory_bar(df):
             fig.tight_layout()
             return fig_to_base64(fig)
     
-    # Fallback: plot second and third columns (already skipped first two rows)
+    # Fallback: plot second and third columns (already skipped first two rows) - UNCHANGED
     if df.shape[1] < 3:
         return ""
     
@@ -76,6 +79,7 @@ def plot_inventory_bar(df):
     ax.set_title("Inventory Plot")
     fig.tight_layout()
     return fig_to_base64(fig)
+
 
 def plot_storecount_lines(df):
     """
