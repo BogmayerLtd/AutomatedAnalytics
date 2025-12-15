@@ -36,12 +36,14 @@ def fig_to_base64(fig):
     buf.seek(0)
     return base64.b64encode(buf.read()).decode("utf-8")
 
+#changed inventory
 def plot_inventory_bar(df):
     """
     If 'Location' contains 'Southern Crown Partners: Charleston, SC',
     plot only that subset, with Product Name on x-axis,
     On Floor Inventory (Cases) on y-axis, skipping the first two rows.
     Otherwise, just plot the second column vs. the third column, skipping two rows.
+    Put a ceiling at 1000 on inventory (drop bars > 1000).
     """
     # Skip first 2 rows for all processing
     df = df.iloc[2:].copy()
@@ -49,6 +51,11 @@ def plot_inventory_bar(df):
     if "Distributor Location" in df.columns and (df["Distributor Location"] == "Southern Crown Partners: Charleston, SC").any():
         sub = df[df["Distributor Location"] == "Southern Crown Partners: Charleston, SC"].copy()
         if "Product Name" in sub.columns and "On Floor Inventory (Cases)" in sub.columns:
+            # filter to only rows <= 1000
+            sub = sub[sub["On Floor Inventory (Cases)"] <= 1000]
+            if sub.empty:
+                return ""  # nothing to plot after filtering
+
             x = sub["Product Name"]
             y = sub["On Floor Inventory (Cases)"].fillna(0)
             fig, ax = plt.subplots(figsize=(10, 6))
@@ -56,7 +63,7 @@ def plot_inventory_bar(df):
             plt.xticks(rotation=90)
             ax.set_xlabel("Product Name")
             ax.set_ylabel("# of Cases")
-            ax.set_title("Charleston Inventory")
+            ax.set_title("Charleston Inventory (≤ 1000 cases)")
             fig.tight_layout()
             return fig_to_base64(fig)
     
@@ -67,15 +74,23 @@ def plot_inventory_bar(df):
     # use column 1 for x and column 2 for y
     x = df.iloc[:, 1].astype(str)
     y = pd.to_numeric(df.iloc[:, 2], errors="coerce").fillna(0)
+
+    # filter to inventory <= 1000
+    mask = y <= 1000
+    x = x[mask]
+    y = y[mask]
+    if y.empty:
+        return ""  # nothing to plot after filtering
     
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.bar(x, y, width=0.9, edgecolor="white", linewidth=0.7)
     plt.xticks(rotation=90)
     ax.set_xlabel(df.columns[1])  # column index 1
     ax.set_ylabel(df.columns[2])  # column index 2
-    ax.set_title("Inventory Plot")
+    ax.set_title("Inventory Plot (≤ 1000)")
     fig.tight_layout()
     return fig_to_base64(fig)
+
 
 def plot_storecount_lines(df):
     """
