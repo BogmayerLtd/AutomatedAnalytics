@@ -43,17 +43,33 @@ def plot_inventory_bar(df):
     On Floor Inventory (Cases) on y-axis, skipping the first two rows.
     Otherwise, just plot the second column vs. the third column, skipping two rows.
     """
+    desired_order = [
+        "Island Coastal Lager 2/12 pack 12oz Cans",
+        "Island Coastal Lager 4/6 pack 12oz Cans",
+        "Island Coastal Lager 1/6 Barrel Keg",
+        "Island Coastal Lager 1/2 Barrel Keg",
+        "Island Active 2/12 pack 12oz Cans",
+        "Island Active 1/6 Keg",
+        "Island Chill Lemon Lime 6/4 pack 12oz Cans",
+        "Island Chill Strawberry Mango 6/4 pack 12oz Cans",
+        "Island Chill Pineapple Coconut 6/4 pack 12oz Cans"
+    ]
+    
+    # Skip first 2 rows for all processing
     df = df.iloc[2:].copy()
     
     if "Location" in df.columns and (df["Location"] == "Southern Crown Partners: Charleston, SC").any():
         sub = df[df["Location"] == "Southern Crown Partners: Charleston, SC"].copy()
         if "Product Name" in sub.columns and "On Floor Inventory (Cases)" in sub.columns:
-            sub = sub[pd.to_numeric(sub["On Floor Inventory (Cases)"], errors='coerce') <= 1000]
+            # Filter ceiling + exact order (ONLY 6 lines added)
+            sub["inv"] = pd.to_numeric(sub["On Floor Inventory (Cases)"], errors='coerce').fillna(0)
+            sub = sub[sub["inv"] <= 1000].set_index("Product Name").reindex(desired_order).dropna()
             if sub.empty:
                 return ""
-                
-            x = sub["Product Name"]
-            y = sub["On Floor Inventory (Cases)"].fillna(0)
+            
+            x = sub.index
+            y = sub["inv"]
+            
             fig, ax = plt.subplots(figsize=(10, 6))
             ax.bar(x, y, width=0.9, edgecolor="white", linewidth=0.7)
             plt.xticks(rotation=90)
@@ -79,6 +95,7 @@ def plot_inventory_bar(df):
     ax.set_title("Inventory Plot")
     fig.tight_layout()
     return fig_to_base64(fig)
+
 
 
 def plot_storecount_lines(df):
