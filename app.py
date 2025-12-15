@@ -82,7 +82,7 @@ def plot_inventory_bar(df):
             plt.xticks(rotation=90)
             ax.set_xlabel("Product Name")
             ax.set_ylabel("# of Cases")
-            ax.set_title("Charleston Inventory (≤ 1000 cases)")
+            ax.set_title("Charleston Inventory")
             fig.tight_layout()
             return fig_to_base64(fig)
     
