@@ -45,8 +45,8 @@ def plot_inventory_bar(df):
     """
     df = df.iloc[2:].copy()
     
-    if "Distributor Location" in df.columns and (df["Distributor Location"] == "Southern Crown Partners: Charleston, SC").any():
-        sub = df[df["Distributor Location"] == "Southern Crown Partners: Charleston, SC"].copy()
+    if "Location" in df.columns and (df["Location"] == "Southern Crown Partners: Charleston, SC").any():
+        sub = df[df["Location"] == "Southern Crown Partners: Charleston, SC"].copy()
         if "Product Name" in sub.columns and "On Floor Inventory (Cases)" in sub.columns:
             sub = sub[pd.to_numeric(sub["On Floor Inventory (Cases)"], errors='coerce') <= 1000]
             if sub.empty:
